@@ -1,18 +1,10 @@
-__pycache__/
-*.py[cod]
-.venv/
+node_modules/
 dist/
-build/
-*.egg-info/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.coverage
-htmlcov/
+*.tgz
+.pnpm-store/
 
 # local secrets — never commit
 *.cookie
 *.cookies.txt
 .env
 .env.local
-

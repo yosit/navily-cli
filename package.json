@@ -1,0 +1,57 @@
+{
+  "name": "@yosit/navily-cli",
+  "version": "0.1.0",
+  "description": "CLI for navily.com (marinas, anchorages, weather, bookings)",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "navily": "bin/navily.mjs"
+  },
+  "files": [
+    "bin/",
+    "dist/",
+    "skills/",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepare": "pnpm run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "dev": "node --import tsx/esm src/cli.ts"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "skill",
+    "navily",
+    "sailing",
+    "marina",
+    "cli"
+  ],
+  "author": "yosit <yosi@taguri.com>",
+  "license": "MIT",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "dependencies": {
+    "cli-table3": "^0.6.5",
+    "commander": "^12.1.0",
+    "cycletls": "^1.0.26",
+    "form-data": "^4.0.4",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.5"
+  }
+}

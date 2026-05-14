@@ -4,24 +4,28 @@ Guidance for Claude Code working in this repository.
 
 ## What this is
 
-A Python CLI (`navily`) for [navily.com](https://www.navily.com): search marinas/anchorages, read reviews, fetch weather forecasts, list a region's spots, view bookings, etc.
+A TypeScript CLI (`navily`) for [navily.com](https://www.navily.com): search marinas/anchorages, read reviews, fetch weather forecasts, list a region's spots, view bookings, etc.
 
 ## Tech stack
 
-- **Runtime**: Python ≥ 3.10
-- **HTTP**: `curl_cffi` with `impersonate="chrome131"` — mandatory, see below
-- **CLI**: `click`
-- **Tables**: `rich`
-- **Tests**: `pytest`
-- **Packaging**: `hatchling`
+- **Runtime**: Node ≥ 20
+- **HTTP**: `cycletls` (Go binary, Chrome TLS impersonation) — mandatory, see below
+- **CLI**: `commander`
+- **Tables**: `cli-table3`
+- **Tests**: `vitest`
+- **Build**: `tsc` → `dist/`
 
 ## Critical: Cloudflare TLS fingerprint requirement
 
 Both `www.navily.com` and `api.navily.com` are Cloudflare-gated. The `cf_clearance` cookie is bound to the browser's TLS fingerprint (JA3 hash).
 
-Plain `curl`, Node's `https`, and Python's `requests` all get a 403 challenge page even with a valid `cf_clearance` cookie. We **must** use a TLS-impersonating client. `curl_cffi` is the chosen one.
+Node's built-in `https` and `fetch` get a 403 challenge page even with a valid `cf_clearance` cookie. We **must** use a TLS-impersonating client.
 
-If you change the HTTP client, the API stops working. Don't switch to `requests` or `httpx` "for simplicity".
+`cycletls` ships a small Go binary that opens a local WebSocket; the JS side proxies requests through it with a Chrome JA3 string. The first request to a `NavilyClient` spawns the subprocess; call `client.close()` to shut it down when done. The CLI handles this automatically.
+
+If you change the HTTP client, the API stops working. Don't switch to `node-fetch`, `undici`, or `axios` "for simplicity".
+
+cycletls's npm package has a packaging quirk: `form-data` and `ws` are runtime deps but not declared. We list them explicitly in `package.json` to keep the install reproducible.
 
 ## Critical: no programmatic login
 
@@ -32,11 +36,11 @@ The CLI requires an existing browser session cookie:
 - `navily auth set <cookie-string>` — set raw cookie value
 - `NAVILY_COOKIE` env var also works
 
-Cookie lifetime ≈ 1 h (`cf_clearance` rotation). On Cloudflare/auth errors the CLI exits non-zero and tells the user to refresh.
+Cookie lifetime ≈ 1 h (`cf_clearance` rotation). On Cloudflare/auth errors the CLI exits non-zero (codes 2/3) and tells the user to refresh.
 
 ## Two API surfaces
 
-1. **Direct www endpoints**: `/ajax/...`, `/api/...` on `www.navily.com`. Limited surface (~10 endpoints): `whoami`, `search`, `map-search`, `map-search/price`, `ports/get-with-media`, `markdown-to-html`.
+1. **Direct www endpoints**: `/ajax/...`, `/api/...` on `www.navily.com`. Small surface: `whoami`, `search`, `map-search`, `map-search/price`, `ports/get-with-media`, `markdown-to-html`.
 2. **Proxied endpoints** via `POST /api/proxy` with body `{url, method, data}`. The Laravel backend forwards to `api.navily.com`. This is the richer surface: `/users/me`, `/ports/{id}/...`, `/moorings/{id}/...`, `/regions/{id}/...`, `/search/places`, `/boats`, `/lists`, `/demands`, `/cards`, etc.
 
 The proxy returns `{"message": "The route X could not be found."}` (HTTP 200) for unknown paths — surfaced as `NotFoundError`. Always check the message, not just the status code.
@@ -44,23 +48,29 @@ The proxy returns `{"message": "The route X could not be found."}` (HTTP 200) fo
 ## Project layout
 
 ```
-src/navily/
-  __init__.py
-  cli.py           — click commands
-  client.py        — NavilyClient: one method per endpoint
-  config.py        — cookie save/load, curl parsing, XSRF extraction
-  formatters.py    — JSON and Rich-table output
+src/
+  cli.ts           — commander program; one subcommand per endpoint
+  client.ts        — NavilyClient: one method per endpoint
+  config.ts        — cookie save/load, curl parsing, XSRF extraction
+  formatters.ts    — JSON and cli-table3 output
+  types.ts         — shared TypeScript interfaces
+  index.ts         — public API re-exports
+bin/
+  navily.mjs       — shebang wrapper around dist/cli.js
 tests/
-  test_config.py
-  test_formatters.py
+  config.test.ts
+  formatters.test.ts
 ```
 
 ## Commands
 
 ```bash
-pip install -e .
-pytest                # run tests
-navily --help         # see all commands
+pnpm install
+pnpm build             # tsc → dist/
+pnpm test              # vitest
+pnpm lint              # tsc --noEmit
+pnpm dev -- whoami     # run from source via tsx
+node ./bin/navily.mjs --help
 ```
 
 ## Credential storage
