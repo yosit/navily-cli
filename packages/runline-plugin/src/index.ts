@@ -1,0 +1,503 @@
+/**
+ * runline plugin for navily.com.
+ *
+ * Exposes navily as JavaScript actions an agent can call from the QuickJS
+ * sandbox. Pairs with `dripline-plugin-navily` (SQL reads) — runline is
+ * better when you want to chain calls or perform writes.
+ *
+ * Action handlers run on the host (Node), not in the sandbox, so they
+ * have full access to `cycletls` (Chrome JA3 impersonation) via
+ * `@yosit/navily-cli`'s NavilyClient — required for Cloudflare-gated
+ * www.navily.com / api.navily.com.
+ *
+ * Auth chain: connection.config.cookie → NAVILY_COOKIE env → ~/.config/navily/cookie.
+ */
+import type { ActionContext, RunlinePluginAPI } from "runline";
+import { NavilyClient, loadCookie } from "@yosit/navily-cli";
+
+// Reuse a single NavilyClient per cookie for the life of the process —
+// cycletls spawns a Go subprocess on first request, no reason to repeat
+// that per action call.
+const clientCache = new Map<string, NavilyClient>();
+
+function resolveCookie(ctx: ActionContext): string {
+  const fromConfig = ctx.connection?.config?.cookie;
+  if (typeof fromConfig === "string" && fromConfig.trim()) {
+    return fromConfig.trim();
+  }
+  const fromDisk = loadCookie();
+  if (fromDisk) return fromDisk;
+  throw new Error(
+    "No navily cookie. Set the `cookie` field on the runline connection, " +
+      "set NAVILY_COOKIE, or run `navily auth from-curl` (writes ~/.config/navily/cookie).",
+  );
+}
+
+function getClient(ctx: ActionContext): NavilyClient {
+  const cookie = resolveCookie(ctx);
+  let client = clientCache.get(cookie);
+  if (!client) {
+    client = new NavilyClient(cookie);
+    clientCache.set(cookie, client);
+  }
+  return client;
+}
+
+// ── input helpers ────────────────────────────────────────────────────────
+
+function num(input: unknown, key: string): number {
+  const v = (input as Record<string, unknown>)?.[key];
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v.trim() !== "") {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  throw new Error(`missing or invalid required input '${key}' (expected number)`);
+}
+
+function str(input: unknown, key: string): string {
+  const v = (input as Record<string, unknown>)?.[key];
+  if (typeof v === "string" && v.length > 0) return v;
+  throw new Error(`missing or invalid required input '${key}' (expected string)`);
+}
+
+function optStr(input: unknown, key: string): string | undefined {
+  const v = (input as Record<string, unknown>)?.[key];
+  return typeof v === "string" && v.length > 0 ? v : undefined;
+}
+
+function optNum(input: unknown, key: string): number | undefined {
+  const v = (input as Record<string, unknown>)?.[key];
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v.trim() !== "") {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
+}
+
+// ── plugin ───────────────────────────────────────────────────────────────
+
+export default function navily(rl: RunlinePluginAPI): void {
+  rl.setName("navily");
+  rl.setVersion("0.1.0");
+  rl.setConnectionSchema({
+    cookie: {
+      type: "string",
+      required: false,
+      description:
+        "Full navily.com cookie string (incl. navily_session, XSRF-TOKEN, cf_clearance). " +
+        "If omitted, the plugin reads NAVILY_COOKIE or ~/.config/navily/cookie.",
+      env: "NAVILY_COOKIE",
+    },
+  });
+
+  // ── identity ─────────────────────────────────────────────────────────
+
+  rl.registerAction("identity.whoami", {
+    description: "Current session profile (status, name, email, avatar) — /ajax/get-session-data",
+    inputSchema: {},
+    async execute(_input, ctx) {
+      return getClient(ctx).whoami();
+    },
+  });
+
+  rl.registerAction("identity.me", {
+    description: "Authenticated user — full profile from /users/me",
+    inputSchema: {},
+    async execute(_input, ctx) {
+      return getClient(ctx).me();
+    },
+  });
+
+  rl.registerAction("identity.user", {
+    description: "Public profile for any user — /users/{userId}",
+    inputSchema: {
+      userId: { type: "number", required: true, description: "navily user id" },
+    },
+    async execute(input, ctx) {
+      return getClient(ctx).user(num(input, "userId"));
+    },
+  });
+
+  // ── search ───────────────────────────────────────────────────────────
+
+  rl.registerAction("search.quick", {
+    description: "Quick autocomplete-style search across ports, moorings, regions, users — /api/search",
+    inputSchema: {
+      q: { type: "string", required: true, description: "search query" },
+    },
+    async execute(input, ctx) {
+      return getClient(ctx).quickSearch(str(input, "q"));
+    },
+  });
+
+  rl.registerAction("search.places", {
+    description: "Hybrid search across ports, moorings, users, shops, regions — /search/places",
+    inputSchema: {
+      query: { type: "string", required: true, description: "search query" },
+      kinds: {
+        type: "string",
+        required: false,
+        description: "comma-joined subset of port,mooring,user,shop,region (default all)",
+      },
+      limit: { type: "number", required: false, description: "max results per kind (default 6)" },
+    },
+    async execute(input, ctx) {
+      return getClient(ctx).searchPlaces(str(input, "query"), {
+        kinds: optStr(input, "kinds"),
+        limit: optNum(input, "limit"),
+      });
+    },
+  });
+
+  rl.registerAction("search.boats", {
+    description: "Standard boat catalog — /search/standard-boats. perPage must be ≥ 10.",
+    inputSchema: {
+      keyword: { type: "string", required: true, description: "boat name keyword" },
+      perPage: { type: "number", required: false, description: "page size, ≥10 (default 10)" },
+    },
+    async execute(input, ctx) {
+      return getClient(ctx).searchStandardBoats(str(input, "keyword"), optNum(input, "perPage") ?? 10);
+    },
+  });
+
+  rl.registerAction("search.map", {
+    description: "Spots near a coordinate within `distanceM` meters — /api/map-search",
+    inputSchema: {
+      latitude: { type: "number", required: true },
+      longitude: { type: "number", required: true },
+      distanceM: { type: "number", required: false, description: "search radius in meters (default 25000)" },
+      kinds: {
+        type: "string",
+        required: false,
+        description: "'port', 'mooring', or 'port,mooring' (default both)",
+      },
+    },
+    async execute(input, ctx) {
+      return getClient(ctx).mapSearch(
+        num(input, "latitude"),
+        num(input, "longitude"),
+        optNum(input, "distanceM") ?? 25_000,
+        optStr(input, "kinds"),
+      );
+    },
+  });
+
+  // ── ports (marinas) ──────────────────────────────────────────────────
+
+  rl.registerAction("port.get", {
+    description: "Marina detail — /ports/{portId}",
+    inputSchema: { portId: { type: "number", required: true } },
+    async execute(input, ctx) {
+      return getClient(ctx).port(num(input, "portId"));
+    },
+  });
+
+  rl.registerAction("port.getWithMedia", {
+    description: "Marina detail incl. photos, equipments, hours — /api/ports/get-with-media",
+    inputSchema: { portId: { type: "number", required: true } },
+    async execute(input, ctx) {
+      return getClient(ctx).marinaWithMedia(num(input, "portId"));
+    },
+  });
+
+  rl.registerAction("port.getPriceTonight", {
+    description:
+      "Tonight's berth price for a bookable marina — /api/map-search/price. Marinas only; anchorages 500.",
+    inputSchema: { portId: { type: "number", required: true } },
+    async execute(input, ctx) {
+      return getClient(ctx).marinaPriceTonight(num(input, "portId"));
+    },
+  });
+
+  rl.registerAction("port.getMyComment", {
+    description: "Current user's own review on this marina — /ports/{portId}/comment",
+    inputSchema: { portId: { type: "number", required: true } },
+    async execute(input, ctx) {
+      return getClient(ctx).portComment(num(input, "portId"));
+    },
+  });
+
+  rl.registerAction("port.listComments", {
+    description: "Paginated reviews — /ports/{portId}/comments (page 1)",
+    inputSchema: { portId: { type: "number", required: true } },
+    async execute(input, ctx) {
+      return getClient(ctx).portComments(num(input, "portId"));
+    },
+  });
+
+  rl.registerAction("port.listPhotos", {
+    description: "Paginated photos — /ports/{portId}/photos (page 1)",
+    inputSchema: { portId: { type: "number", required: true } },
+    async execute(input, ctx) {
+      return getClient(ctx).portPhotos(num(input, "portId"));
+    },
+  });
+
+  rl.registerAction("port.listEquipments", {
+    description: "Equipment list (water/electricity/fuel/wifi/showers/wc/recycling/…) — /ports/{portId}/equipments",
+    inputSchema: { portId: { type: "number", required: true } },
+    async execute(input, ctx) {
+      return getClient(ctx).portEquipments(num(input, "portId"));
+    },
+  });
+
+  rl.registerAction("port.getWeather", {
+    description: "33-entry forecast — /ports/{portId}/weather",
+    inputSchema: { portId: { type: "number", required: true } },
+    async execute(input, ctx) {
+      return getClient(ctx).portWeather(num(input, "portId"));
+    },
+  });
+
+  rl.registerAction("port.listShops", {
+    description: "Nearby shops — /ports/{portId}/shops",
+    inputSchema: { portId: { type: "number", required: true } },
+    async execute(input, ctx) {
+      return getClient(ctx).portShops(num(input, "portId"));
+    },
+  });
+
+  rl.registerAction("port.listBookableAround", {
+    description: "Other bookable marinas around this one — /ports/{portId}/bookable-around-ports",
+    inputSchema: {
+      portId: { type: "number", required: true },
+      portsCount: { type: "number", required: false, description: "max alternatives (default 12)" },
+    },
+    async execute(input, ctx) {
+      return getClient(ctx).portBookableAround(num(input, "portId"), optNum(input, "portsCount") ?? 12);
+    },
+  });
+
+  rl.registerAction("port.markVisited", {
+    description:
+      "Mark 'I've been here' on a marina — POST /ports/{portId}/discover. Side effect on the user's account.",
+    inputSchema: { portId: { type: "number", required: true } },
+    async execute(input, ctx) {
+      return getClient(ctx).callProxy(`/ports/${num(input, "portId")}/discover`, "post");
+    },
+  });
+
+  // ── moorings (anchorages) ────────────────────────────────────────────
+
+  rl.registerAction("mooring.get", {
+    description: "Anchorage detail — /moorings/{mooringId}",
+    inputSchema: { mooringId: { type: "number", required: true } },
+    async execute(input, ctx) {
+      return getClient(ctx).mooring(num(input, "mooringId"));
+    },
+  });
+
+  rl.registerAction("mooring.listComments", {
+    description: "Paginated reviews — /moorings/{mooringId}/comments (page 1)",
+    inputSchema: { mooringId: { type: "number", required: true } },
+    async execute(input, ctx) {
+      return getClient(ctx).mooringComments(num(input, "mooringId"));
+    },
+  });
+
+  rl.registerAction("mooring.listPhotos", {
+    description: "Paginated photos — /moorings/{mooringId}/photos (page 1)",
+    inputSchema: { mooringId: { type: "number", required: true } },
+    async execute(input, ctx) {
+      return getClient(ctx).mooringPhotos(num(input, "mooringId"));
+    },
+  });
+
+  rl.registerAction("mooring.getWeather", {
+    description:
+      "Forecast with wind/wave protection scores — /moorings/{mooringId}/weather",
+    inputSchema: { mooringId: { type: "number", required: true } },
+    async execute(input, ctx) {
+      return getClient(ctx).mooringWeather(num(input, "mooringId"));
+    },
+  });
+
+  rl.registerAction("mooring.listShops", {
+    description: "Nearby shops — /moorings/{mooringId}/shops",
+    inputSchema: { mooringId: { type: "number", required: true } },
+    async execute(input, ctx) {
+      return getClient(ctx).mooringShops(num(input, "mooringId"));
+    },
+  });
+
+  // ── regions ──────────────────────────────────────────────────────────
+
+  rl.registerAction("region.list", {
+    description: "Global region index — /regions (page 1)",
+    inputSchema: {},
+    async execute(_input, ctx) {
+      return getClient(ctx).regions();
+    },
+  });
+
+  rl.registerAction("region.get", {
+    description: "Region detail — /regions/{regionId}",
+    inputSchema: { regionId: { type: "number", required: true } },
+    async execute(input, ctx) {
+      return getClient(ctx).region(num(input, "regionId"));
+    },
+  });
+
+  rl.registerAction("region.listPorts", {
+    description: "Marinas in a region — /regions/{regionId}/ports (page 1)",
+    inputSchema: { regionId: { type: "number", required: true } },
+    async execute(input, ctx) {
+      return getClient(ctx).regionPorts(num(input, "regionId"));
+    },
+  });
+
+  rl.registerAction("region.listMoorings", {
+    description: "Anchorages in a region — /regions/{regionId}/moorings (page 1)",
+    inputSchema: { regionId: { type: "number", required: true } },
+    async execute(input, ctx) {
+      return getClient(ctx).regionMoorings(num(input, "regionId"));
+    },
+  });
+
+  // ── current user's data ──────────────────────────────────────────────
+
+  rl.registerAction("me.listBoats", {
+    description: "Your saved boats — /boats",
+    inputSchema: {},
+    async execute(_input, ctx) {
+      return getClient(ctx).boats();
+    },
+  });
+
+  rl.registerAction("me.listLists", {
+    description: "Your favourites lists — /lists",
+    inputSchema: {},
+    async execute(_input, ctx) {
+      return getClient(ctx).lists();
+    },
+  });
+
+  rl.registerAction("me.listListEntries", {
+    description: "Places saved in a list — /lists/{listId}/entries",
+    inputSchema: { listId: { type: "number", required: true } },
+    async execute(input, ctx) {
+      return getClient(ctx).listEntries(num(input, "listId"));
+    },
+  });
+
+  rl.registerAction("me.listListComments", {
+    description: "Comments on a list — /lists/{listId}/comments (page 1)",
+    inputSchema: { listId: { type: "number", required: true } },
+    async execute(input, ctx) {
+      return getClient(ctx).listComments(num(input, "listId"));
+    },
+  });
+
+  rl.registerAction("me.listCards", {
+    description: "Your saved payment cards — /cards",
+    inputSchema: {},
+    async execute(_input, ctx) {
+      return getClient(ctx).cards();
+    },
+  });
+
+  rl.registerAction("me.listNotifications", {
+    description: "Your notifications — /notifications",
+    inputSchema: {},
+    async execute(_input, ctx) {
+      return getClient(ctx).notifications();
+    },
+  });
+
+  rl.registerAction("me.getNotificationsCount", {
+    description: "Last failed payment intents — /notifications/count",
+    inputSchema: {},
+    async execute(_input, ctx) {
+      return getClient(ctx).notificationsCount();
+    },
+  });
+
+  rl.registerAction("me.listDemands", {
+    description: "Your booking demands — /demands",
+    inputSchema: {},
+    async execute(_input, ctx) {
+      return getClient(ctx).demands();
+    },
+  });
+
+  rl.registerAction("me.getDemandsInfos", {
+    description:
+      "Booking summary: hasActive, hasHistory, offersCount, nextConfirmedBooking, offerToBeConfirmed — /demands/infos",
+    inputSchema: {},
+    async execute(_input, ctx) {
+      return getClient(ctx).demandsInfos();
+    },
+  });
+
+  rl.registerAction("me.listDemandsOffers", {
+    description: "Marina offers awaiting your confirmation — /demands/offers",
+    inputSchema: {},
+    async execute(_input, ctx) {
+      return getClient(ctx).demandsOffers();
+    },
+  });
+
+  rl.registerAction("me.getLastSubscription", {
+    description: "Your last subscription record — /user-subscriptions/last",
+    inputSchema: {},
+    async execute(_input, ctx) {
+      return getClient(ctx).subscriptionLast();
+    },
+  });
+
+  // ── reference ────────────────────────────────────────────────────────
+
+  rl.registerAction("reference.listCountries", {
+    description: "251 countries with VHF channel and emergency phone — /misc/countries",
+    inputSchema: {},
+    async execute(_input, ctx) {
+      return getClient(ctx).countries();
+    },
+  });
+
+  // ── proxy escape hatch ───────────────────────────────────────────────
+  //
+  // Lets agents call any documented api.navily.com endpoint without
+  // waiting for a typed wrapper. Same auth/CSRF/Cloudflare guarantees as
+  // typed actions. See ../navily-kb/.napkin/specs/navily-api-architecture.md
+  // for the catalog (POST /demands/{id}/cancel, /boats/create, /users/update,
+  // POST /ports/{id}/comments/create, etc.).
+
+  function proxyAction(method: "get" | "post" | "put" | "patch" | "delete") {
+    return {
+      description:
+        `${method.toUpperCase()} via /api/proxy. Provide the api.navily.com path ` +
+        `(starting with /) and the request \`data\` body. Response is whatever ` +
+        `the upstream Laravel endpoint returns; soft-404 surfaces as a thrown ` +
+        `NotFoundError.`,
+      inputSchema: {
+        path: {
+          type: "string" as const,
+          required: true,
+          description: "api.navily.com path, e.g. /demands/123/cancel or /users/update",
+        },
+        data: {
+          type: "object" as const,
+          required: false,
+          description: "request body (optional; sent as JSON-equivalent form data)",
+        },
+      },
+      async execute(input: unknown, ctx: ActionContext) {
+        const path = str(input, "path");
+        const data = ((input as Record<string, unknown>)?.data ?? {}) as Record<
+          string,
+          unknown
+        >;
+        return getClient(ctx).callProxy(path, method, data);
+      },
+    };
+  }
+
+  rl.registerAction("proxy.get", proxyAction("get"));
+  rl.registerAction("proxy.post", proxyAction("post"));
+  rl.registerAction("proxy.put", proxyAction("put"));
+  rl.registerAction("proxy.patch", proxyAction("patch"));
+  rl.registerAction("proxy.delete", proxyAction("delete"));
+}

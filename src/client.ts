@@ -320,6 +320,21 @@ export class NavilyClient {
     return this.request<T>("POST", "/api/proxy", { jsonBody: body });
   }
 
+  /**
+   * Public escape hatch for endpoints not yet wrapped in a typed method
+   * (e.g. POST writes whose payload shape is documented in
+   * `../navily-kb/.napkin/specs/navily-api-architecture.md` but not
+   * implemented here). Subject to the same auth/CSRF/Cloudflare checks
+   * as the typed methods.
+   */
+  callProxy<T = unknown>(
+    path: string,
+    method: "get" | "post" | "put" | "delete" | "patch" = "get",
+    data: Record<string, unknown> = {},
+  ): Promise<T> {
+    return this.proxy<T>(path, method, data);
+  }
+
   // User
   /** GET /users/me — full profile. */
   me() { return this.proxy<import("./types.js").User>("/users/me"); }
