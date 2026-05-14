@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "navily-cli"
+version = "0.1.0"
+description = "CLI for navily.com (cruising guide: marinas, anchorages, weather, reviews)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "yosit", email = "yosi@taguri.com" }]
+dependencies = [
+    "curl_cffi>=0.15.0",
+    "click>=8.1.0",
+    "rich>=13.0.0",
+]
+
+[project.scripts]
+navily = "navily.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/navily"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
