@@ -10,16 +10,21 @@
   },
   "files": [
     "bin/",
+    "docs/",
     "dist/",
     "skills/",
     "README.md"
   ],
   "scripts": {
     "build": "tsc",
-    "prepare": "pnpm run build",
+    "build:plugins": "pnpm --filter runline-plugin-navily build && pnpm --filter dripline-plugin-navily build",
+    "build:all": "pnpm run build && pnpm run build:plugins",
+    "prepare": "pnpm run build:all",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
+    "lint:plugins": "pnpm --filter runline-plugin-navily lint && pnpm --filter dripline-plugin-navily lint",
+    "lint:all": "pnpm run lint && pnpm run lint:plugins",
     "dev": "node --import tsx/esm src/cli.ts"
   },
   "keywords": [

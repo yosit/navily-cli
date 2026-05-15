@@ -10,35 +10,32 @@
  * `@yosit/navily-cli`'s NavilyClient — required for Cloudflare-gated
  * www.navily.com / api.navily.com.
  *
- * Auth chain: connection.config.cookie → NAVILY_COOKIE env → ~/.config/navily/cookie.
+ * Auth chain: connection.config.cookie -> NAVILY_COOKIE env ->
+ * ~/.config/navily/cookie -> NAVILY_EMAIL/NAVILY_PASSWORD auto-auth.
  */
 import type { ActionContext, RunlinePluginAPI } from "runline";
-import { NavilyClient, loadCookie } from "@yosit/navily-cli";
+import { NavilyClient } from "@yosit/navily-cli";
 
-// Reuse a single NavilyClient per cookie for the life of the process —
-// cycletls spawns a Go subprocess on first request, no reason to repeat
-// that per action call.
+// Reuse clients for the life of the process. The default auto-auth client
+// shares ~/.config/navily/cookie with the CLI and uses the lock file there,
+// so parallel commands/processes do not stampede login handshakes.
 const clientCache = new Map<string, NavilyClient>();
 
-function resolveCookie(ctx: ActionContext): string {
+function getConfiguredCookie(ctx: ActionContext): string | null {
   const fromConfig = ctx.connection?.config?.cookie;
   if (typeof fromConfig === "string" && fromConfig.trim()) {
     return fromConfig.trim();
   }
-  const fromDisk = loadCookie();
-  if (fromDisk) return fromDisk;
-  throw new Error(
-    "No navily cookie. Set the `cookie` field on the runline connection, " +
-      "set NAVILY_COOKIE, or run `navily auth from-curl` (writes ~/.config/navily/cookie).",
-  );
+  return null;
 }
 
 function getClient(ctx: ActionContext): NavilyClient {
-  const cookie = resolveCookie(ctx);
-  let client = clientCache.get(cookie);
+  const cookie = getConfiguredCookie(ctx);
+  const key = cookie ? `cookie:${cookie}` : "auto";
+  let client = clientCache.get(key);
   if (!client) {
-    client = new NavilyClient(cookie);
-    clientCache.set(cookie, client);
+    client = cookie ? new NavilyClient(cookie) : new NavilyClient();
+    clientCache.set(key, client);
   }
   return client;
 }
@@ -87,7 +84,8 @@ export default function navily(rl: RunlinePluginAPI): void {
       required: false,
       description:
         "Full navily.com cookie string (incl. navily_session, XSRF-TOKEN, cf_clearance). " +
-        "If omitted, the plugin reads NAVILY_COOKIE or ~/.config/navily/cookie.",
+        "If omitted, the plugin uses NAVILY_COOKIE, ~/.config/navily/cookie, or " +
+        "NAVILY_EMAIL/NAVILY_PASSWORD auto-auth.",
       env: "NAVILY_COOKIE",
     },
   });
@@ -461,7 +459,7 @@ export default function navily(rl: RunlinePluginAPI): void {
   //
   // Lets agents call any documented api.navily.com endpoint without
   // waiting for a typed wrapper. Same auth/CSRF/Cloudflare guarantees as
-  // typed actions. See ../navily-kb/.napkin/specs/navily-api-architecture.md
+  // typed actions. See docs/kb/navily-api-architecture.md
   // for the catalog (POST /demands/{id}/cancel, /boats/create, /users/update,
   // POST /ports/{id}/comments/create, etc.).
 

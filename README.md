@@ -41,27 +41,41 @@ node /path/to/navily-cli/bin/navily.mjs --help
 alias navily="node /path/to/navily-cli/bin/navily.mjs"
 ```
 
-### From the GitHub Packages registry
+### Vex agent
 
-If you have a GitHub PAT with `read:packages`:
+Vex does not need Chrome or a display server. Install from source, build the
+CLI and plugins, then provide credentials as environment variables:
 
 ```bash
-# Add a registry hint for the @yosit scope (one-time):
-npm config set @yosit:registry https://npm.pkg.github.com
-npm config set //npm.pkg.github.com/:_authToken "$GITHUB_TOKEN"
+git clone https://github.com/yosit/navily-cli.git
+cd navily-cli
+pnpm install
+pnpm build:all
 
-# Then install globally:
-pnpm add -g @yosit/navily-cli
-# or with npm:
-npm i -g @yosit/navily-cli
+export NAVILY_EMAIL=you@example.com
+export NAVILY_PASSWORD=…
+node ./bin/navily.mjs whoami
 ```
+
+For pipeline steps that expect `navily` on `PATH`, link the package after the
+build:
+
+```bash
+pnpm link --global
+navily whoami
+```
+
+The first command mints `~/.config/navily/cookie`; later CLI, runline, and
+dripline calls share that cookie. Concurrent processes use a lock file in the
+same config directory, so they do not race multiple login handshakes. If Vex
+injects a pre-minted `NAVILY_COOKIE`, that value takes precedence and skips
+auto-login.
 
 ### Uninstall
 
 ```bash
-pnpm uninstall --global @yosit/navily-cli   # if installed from registry
-pnpm unlink --global @yosit/navily-cli      # if linked from a clone
-rm -rf ~/.config/navily                     # wipes the saved cookie
+pnpm unlink --global @yosit/navily-cli
+rm -rf ~/.config/navily
 ```
 
 ## Authenticate
@@ -88,7 +102,7 @@ navily auth login
 
 On success the cookie is saved and verified. Normal subcommands use the same path automatically, so `auth login` is mainly useful as an explicit preflight.
 
-If browserless login is blocked by Cloudflare in the future, run `navily auth login --browser` where Chrome is available, or set `NAVILY_COOKIE` from a pre-minted session. Automatic Chrome fallback is opt-in with `NAVILY_AUTH_BROWSER_FALLBACK=1`.
+If browserless login is blocked by Cloudflare, run `navily auth login --browser` where Chrome is available, or set `NAVILY_COOKIE` from a pre-minted session. Automatic Chrome fallback is opt-in with `NAVILY_AUTH_BROWSER_FALLBACK=1`.
 
 ### Option B — Chrome login fallback
 
@@ -98,7 +112,7 @@ Where Chrome is installed, you can force the original modal-driving flow:
 navily auth login --browser
 ```
 
-This opens a fresh ephemeral Chrome profile and fills the form. `--headless` is available for diagnostics, but navily.com's WAF has historically refused headless Chrome at the connection layer.
+This opens a fresh ephemeral Chrome profile and fills the form.
 
 ### Option C — Paste a cookie from DevTools
 
@@ -157,22 +171,26 @@ navily -f table search "cannes" --limit 3
   - Direct AJAX on `www.navily.com` (`/ajax/...`, `/api/...`).
   - A server-side proxy: `POST /api/proxy` with body `{url, method, data}` forwards to `api.navily.com`. The CLI uses this for `/users/me`, `/ports/{id}/...`, `/moorings/{id}/...`, `/regions/{id}/...`, etc.
 
-Endpoints, entities, and quirks are documented in the napkin KB at `../navily-kb/.napkin/specs/`.
+Endpoints, entities, and quirks are documented in `docs/kb/`.
 
 ## Develop
 
 ```bash
 pnpm install
-pnpm build            # tsc → dist/
+pnpm build:all        # builds CLI + runline/dripline plugins
 pnpm test             # vitest
-pnpm lint             # tsc --noEmit
+pnpm lint:all         # typechecks CLI + plugins
 pnpm dev -- whoami    # run from source via tsx
 ```
+
+Plugin deployment note: `packages/runline-plugin/dist/` and
+`packages/dripline-plugin/dist/` are generated and not tracked. Run
+`pnpm build:plugins` or `pnpm build:all` before deploying either plugin.
 
 ## Programmatic use
 
 ```ts
-import { NavilyClient, loadCookie } from "@yosit/navily-cli";
+import { NavilyClient } from "@yosit/navily-cli";
 
 const client = new NavilyClient();
 try {

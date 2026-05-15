@@ -7,39 +7,36 @@
  * impersonation) — required because both www.navily.com and api.navily.com
  * are Cloudflare-gated and reject Node's built-in HTTP clients.
  *
- * Auth: connection.config.cookie wins; falls back to NAVILY_COOKIE env var
- * or ~/.config/navily/cookie (whatever the navily CLI was set up with).
+ * Auth: connection.config.cookie wins; otherwise falls back to NAVILY_COOKIE,
+ * ~/.config/navily/cookie, or NAVILY_EMAIL/NAVILY_PASSWORD auto-auth.
  */
 import type { DriplinePluginAPI, QueryContext } from "dripline";
-import { NavilyClient, loadCookie } from "@yosit/navily-cli";
+import { NavilyClient } from "@yosit/navily-cli";
 
 // ── client lifecycle ─────────────────────────────────────────────────────
 //
-// cycletls spawns a Go subprocess on first use, so we cache one NavilyClient
-// per distinct cookie for the life of the process. Different connections with
-// different cookies coexist; rotating the cookie creates a new instance.
+// cycletls spawns a Go subprocess on first use, so we cache clients for the
+// life of the process. The default auto-auth client shares
+// ~/.config/navily/cookie with the CLI and uses the lock file there, so
+// parallel commands/processes do not stampede login handshakes.
 
 const clientCache = new Map<string, NavilyClient>();
 
-function resolveCookie(ctx: QueryContext): string {
+function getConfiguredCookie(ctx: QueryContext): string | null {
   const fromConfig = ctx.connection?.config?.cookie;
   if (typeof fromConfig === "string" && fromConfig.trim()) {
     return fromConfig.trim();
   }
-  const fromDisk = loadCookie();
-  if (fromDisk) return fromDisk;
-  throw new Error(
-    "No navily cookie. Set the `cookie` field on the dripline connection, " +
-      "set NAVILY_COOKIE, or run `navily auth from-curl` (writes ~/.config/navily/cookie).",
-  );
+  return null;
 }
 
 function getClient(ctx: QueryContext): NavilyClient {
-  const cookie = resolveCookie(ctx);
-  let client = clientCache.get(cookie);
+  const cookie = getConfiguredCookie(ctx);
+  const key = cookie ? `cookie:${cookie}` : "auto";
+  let client = clientCache.get(key);
   if (!client) {
-    client = new NavilyClient(cookie);
-    clientCache.set(cookie, client);
+    client = cookie ? new NavilyClient(cookie) : new NavilyClient();
+    clientCache.set(key, client);
   }
   return client;
 }
@@ -100,7 +97,8 @@ export default function navily(dl: DriplinePluginAPI): void {
       required: false,
       description:
         "Full navily.com cookie string (incl. navily_session, XSRF-TOKEN, cf_clearance). " +
-        "If omitted, the plugin reads NAVILY_COOKIE or ~/.config/navily/cookie.",
+        "If omitted, the plugin uses NAVILY_COOKIE, ~/.config/navily/cookie, or " +
+        "NAVILY_EMAIL/NAVILY_PASSWORD auto-auth.",
       env: "NAVILY_COOKIE",
     },
   });

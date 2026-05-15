@@ -32,7 +32,8 @@ const dl = await Dripline.create({
       name: "navily",
       plugin: "navily",
       config: {
-        // Optional — falls back to NAVILY_COOKIE env var, then ~/.config/navily/cookie.
+        // Optional — otherwise uses NAVILY_COOKIE, ~/.config/navily/cookie,
+        // or NAVILY_EMAIL/NAVILY_PASSWORD auto-auth.
         cookie: process.env.NAVILY_COOKIE,
       },
     },
@@ -49,17 +50,15 @@ const marinas = await dl.query(`
 
 ## Auth
 
-A real browser session cookie is required (Cloudflare Turnstile gates the
-login form, so credentials cannot be posted programmatically). Cookie sources,
-in priority order:
+Cookie sources, in priority order:
 
 1. The `cookie` field on the dripline connection config.
 2. `NAVILY_COOKIE` env var.
-3. `~/.config/navily/cookie` (whatever `navily auth from-curl` wrote).
+3. `~/.config/navily/cookie` (whatever `navily auth login` or `navily auth from-curl` wrote).
+4. `NAVILY_EMAIL` and `NAVILY_PASSWORD` browserless auto-auth.
 
-Cookie lifetime is roughly one hour — `cf_clearance` rotates and the plugin
-will surface a `CloudflareBlockedError`. Refresh the cookie in DevTools and
-either rerun `navily auth from-curl` or update the connection config.
+The auto-auth path uses the same lock file as the CLI, so parallel commands
+share the minted cookie instead of racing multiple login handshakes.
 
 ## Tables
 

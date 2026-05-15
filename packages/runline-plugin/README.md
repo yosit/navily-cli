@@ -7,8 +7,8 @@ your boats and bookings.
 
 Pairs with [`dripline-plugin-navily`](../dripline-plugin) — dripline gives
 you SQL `SELECT`s, runline gives you imperative actions you can chain
-together. They share the same `NavilyClient` (cycletls / Chrome JA3
-impersonation) so both get past Cloudflare with the same browser cookie.
+together. They use the same cookie file and `cycletls` auth layer, so they
+avoid repeated login handshakes where possible.
 
 Action handlers run on the host (Node), not in the QuickJS sandbox, so
 the cycletls Go subprocess works fine.
@@ -35,7 +35,8 @@ const rl = Runline.create({
       name: "navily",
       plugin: "navily",
       config: {
-        // Optional — falls back to NAVILY_COOKIE env, then ~/.config/navily/cookie.
+        // Optional — otherwise uses NAVILY_COOKIE, ~/.config/navily/cookie,
+        // or NAVILY_EMAIL/NAVILY_PASSWORD auto-auth.
         cookie: process.env.NAVILY_COOKIE,
       },
     },
@@ -53,16 +54,15 @@ const result = await rl.execute(`
 
 ## Auth
 
-A real browser session cookie is required (Cloudflare Turnstile gates the
-login form, so credentials cannot be posted programmatically). Cookie sources,
-in priority order:
+Cookie sources, in priority order:
 
 1. The `cookie` field on the runline connection config.
 2. `NAVILY_COOKIE` env var.
-3. `~/.config/navily/cookie` (whatever `navily auth from-curl` wrote).
+3. `~/.config/navily/cookie` (whatever `navily auth login` or `navily auth from-curl` wrote).
+4. `NAVILY_EMAIL` and `NAVILY_PASSWORD` browserless auto-auth.
 
-Cookie lifetime is roughly one hour; refresh from DevTools when calls start
-failing with `CloudflareBlockedError` or `NavilyAuthError`.
+The auto-auth path uses the same lock file as the CLI, so parallel commands
+share the minted cookie instead of racing multiple login handshakes.
 
 ## Actions
 
@@ -143,7 +143,7 @@ return await navily.proxy.post({ path: "/demands/12345/cancel" });
 ```
 
 The full endpoint catalog with payload notes is at
-[`../../../navily-kb/.napkin/specs/navily-api-architecture.md`](../../../navily-kb/.napkin/specs/navily-api-architecture.md).
+[`../../docs/kb/navily-api-architecture.md`](../../docs/kb/navily-api-architecture.md).
 
 ## Notes
 

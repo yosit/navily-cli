@@ -5,19 +5,12 @@ Claude Code skill: CLI for [navily.com](https://www.navily.com) (marinas, anchor
 ## Setup
 
 ```bash
-pip install /Users/yosit/code/navily-cli
+pnpm install
+pnpm build
+pnpm link --global
 ```
 
-Then capture a session cookie from a real browser (no programmatic login — Cloudflare Turnstile gates the form):
-
-1. Log in at https://www.navily.com in Brave/Chrome.
-2. DevTools → Network → click any `/ajax/get-session-data` row → right-click → **Copy → Copy as cURL**.
-3. `navily auth from-curl --stdin <<< 'PASTE'`
-4. `navily auth status` to verify.
-
-Cookies rotate (~1h Cloudflare `cf_clearance` lifetime). When you see "Cloudflare blocked", re-export.
-
-`NAVILY_COOKIE` env var also works as an alternative to the file.
+Set `NAVILY_EMAIL` and `NAVILY_PASSWORD`; the CLI mints and refreshes cookies automatically. `NAVILY_COOKIE` can still provide a pre-minted cookie.
 
 ## Commands
 
@@ -40,10 +33,12 @@ Output: `--format json` (default) or `-f table` (Rich tables; pass before subcom
 
 | Var | Purpose |
 |-----|---------|
+| `NAVILY_EMAIL` | Login email for automatic browserless auth |
+| `NAVILY_PASSWORD` | Login password for automatic browserless auth |
 | `NAVILY_COOKIE` | Full cookie string (overrides `~/.config/navily/cookie`) |
 
 ## How it works
 
-- Cloudflare requires Chrome TLS fingerprint — we use `curl_cffi` (Chrome 131 impersonation).
+- Cloudflare requires a Chrome-like TLS fingerprint — we use `cycletls`.
 - Two URL surfaces: direct AJAX on `www.navily.com` and proxied `POST /api/proxy` → `api.navily.com`.
-- See `../navily-kb/.napkin/specs/navily-api-architecture.md` for the full endpoint catalog.
+- See `docs/kb/navily-api-architecture.md` for the full endpoint catalog.

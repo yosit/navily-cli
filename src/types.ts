@@ -1,4 +1,4 @@
-/** Shared TypeScript types — see ../navily-kb/.napkin/specs/navily-api-architecture.md. */
+/** Shared TypeScript types — see docs/kb/navily-api-architecture.md. */
 
 export interface Coordinate {
   latitude: number;

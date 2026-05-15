@@ -398,7 +398,7 @@ export class NavilyClient {
   /**
    * Public escape hatch for endpoints not yet wrapped in a typed method
    * (e.g. POST writes whose payload shape is documented in
-   * `../navily-kb/.napkin/specs/navily-api-architecture.md` but not
+   * `docs/kb/navily-api-architecture.md` but not
    * implemented here). Subject to the same auth/CSRF/Cloudflare checks
    * as the typed methods.
    */
