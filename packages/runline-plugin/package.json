@@ -1,6 +1,6 @@
 {
   "name": "runline-plugin-navily",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "navily.com plugin for runline — callable actions for marinas, anchorages, reviews, bookings, weather",
   "type": "module",
   "main": "dist/index.js",
