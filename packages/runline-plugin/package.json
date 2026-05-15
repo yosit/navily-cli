@@ -30,7 +30,7 @@
     "agent"
   ],
   "license": "MIT",
-  "author": "yosit <yosi@taguri.com>",
+  "author": "yosit",
   "engines": {
     "node": ">=20"
   },

@@ -122,6 +122,48 @@ share the minted cookie instead of racing multiple login handshakes.
 - `search.boats({ keyword, perPage? })` → boat catalog. `perPage ≥ 10`.
 - `search.map({ latitude, longitude, distanceM?, kinds? })` → geo search.
 
+### Rendered assets
+
+- `map.staticImage({ latitude?, longitude?, zoom?, width?, height?, markersJson?, outputDir?, filename?, tileUrlTemplate? })` → writes a static SVG map and returns `{ path, contentType, bytes }`.
+- `media.download({ url, outputDir?, filename? })` → downloads a Navily photo/media URL through the host session and returns `{ path, contentType, bytes }`.
+
+`markersJson` is a JSON array of `{ "latitude": 37.74, "longitude": 23.43, "label": "Aegina Marina" }`.
+If `latitude`/`longitude` are omitted, the map centers on the average marker
+coordinate. Tiles default to OpenStreetMap; set `NAVILY_TILE_URL_TEMPLATE` or
+pass `tileUrlTemplate` with `{z}`, `{x}`, and `{y}` placeholders for a different
+tile provider.
+
+```js
+const hits = await navily.search.map({
+  latitude: 37.745,
+  longitude: 23.43,
+  distanceM: 20000,
+  kinds: "port,mooring",
+});
+
+const markers = hits.results.map((spot) => ({
+  latitude: spot.coordinate.latitude,
+  longitude: spot.coordinate.longitude,
+  label: spot.name,
+}));
+
+const map = await navily.map.staticImage({
+  latitude: 37.745,
+  longitude: 23.43,
+  zoom: 12,
+  markersJson: JSON.stringify(markers),
+  filename: "aegina-navily-map.svg",
+});
+
+const photos = await navily.port.listPhotos({ portId: hits.results[0].id });
+const photo = await navily.media.download({
+  url: photos.data[0].url,
+  filename: "aegina-marina.jpg",
+});
+
+return { mapPath: map.path, photoPath: photo.path };
+```
+
 ### Ports (marinas) — reads
 
 - `port.get({ portId })`

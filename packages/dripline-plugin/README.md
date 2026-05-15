@@ -117,6 +117,32 @@ share the minted cookie instead of racing multiple login handshakes.
 - `navily_search_boats(keyword[, per_page])` — boat catalog. `per_page ≥ 10`.
 - `navily_map_search(center_latitude, center_longitude[, max_distance, kinds])` — geo search. **Pass coordinates as strings** (`'39.5696'`, not `39.5696`); dripline strips the decimal on float quals.
 
+### Rendered assets
+
+- `navily_map_static_image(center_latitude?, center_longitude?[, zoom, width, height, markers_json, output_dir, filename, tile_url_template])` — writes a static SVG map and returns its file path and metadata. Pass coordinates as strings.
+- `navily_media_download(media_url[, output_dir, filename])` — downloads a Navily photo/media URL through the host session and returns its file path and metadata.
+
+`markers_json` is a JSON array of `{ "latitude": 37.74, "longitude": 23.43, "label": "Aegina Marina" }`.
+If `center_latitude`/`center_longitude` are omitted, the map centers on the
+average marker coordinate. Tiles default to OpenStreetMap; set
+`NAVILY_TILE_URL_TEMPLATE` or pass `tile_url_template` with `{z}`, `{x}`, and
+`{y}` placeholders for a different tile provider.
+
+```sql
+SELECT path, content_type, bytes
+FROM navily.navily_map_static_image
+WHERE center_latitude = '37.745'
+  AND center_longitude = '23.43'
+  AND zoom = 12
+  AND filename = 'aegina-navily-map.svg'
+  AND markers_json = '[{"latitude":37.745,"longitude":23.43,"label":"Aegina Marina"}]';
+
+SELECT path, content_type, bytes
+FROM navily.navily_media_download
+WHERE media_url = 'https://www.navily.com/mediaRouter/...'
+  AND filename = 'aegina-marina.jpg';
+```
+
 ### Ports (marinas)
 
 - `navily_port(id)` — full marina detail.

@@ -11,7 +11,12 @@
  * ~/.config/navily/cookie, or NAVILY_EMAIL/NAVILY_PASSWORD auto-auth.
  */
 import type { DriplinePluginAPI, QueryContext } from "dripline";
-import { NavilyClient } from "@yosit/navily-cli";
+import {
+  createStaticMapImage,
+  downloadMedia,
+  NavilyClient,
+  type StaticMapMarker,
+} from "@yosit/navily-cli";
 
 // ── client lifecycle ─────────────────────────────────────────────────────
 //
@@ -53,6 +58,41 @@ function qualNum(ctx: QueryContext, name: string): number | undefined {
   if (s === undefined) return undefined;
   const n = Number(s);
   return Number.isFinite(n) ? n : undefined;
+}
+
+function qualMarkers(ctx: QueryContext): StaticMapMarker[] {
+  const raw = qual(ctx, "markers_json");
+  if (!raw) return [];
+  const parsed = JSON.parse(raw);
+  if (!Array.isArray(parsed)) {
+    throw new Error("markers_json must be a JSON array");
+  }
+  return parsed.map((item, index) => {
+    if (!item || typeof item !== "object") {
+      throw new Error(`markers_json[${index}] must be an object`);
+    }
+    const row = item as Record<string, unknown>;
+    const latitude = valueNum(row.latitude ?? row.lat);
+    const longitude = valueNum(row.longitude ?? row.lng ?? row.lon);
+    if (latitude === undefined || longitude === undefined) {
+      throw new Error(`markers_json[${index}] must include latitude and longitude`);
+    }
+    return {
+      latitude,
+      longitude,
+      label: typeof row.label === "string" ? row.label : undefined,
+      color: typeof row.color === "string" ? row.color : undefined,
+    };
+  });
+}
+
+function valueNum(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
 }
 
 /** Paginated<T>.data, raw array, or [single]. */
@@ -411,6 +451,97 @@ export default function navily(dl: DriplinePluginAPI): void {
           raw: J(row),
         };
       }
+    },
+  });
+
+  dl.registerTable("navily_map_static_image", {
+    description:
+      "Render a static SVG map with OSM tiles and optional markers. " +
+      "Pass center_latitude / center_longitude as STRINGS and markers_json as a JSON array.",
+    columns: [
+      { name: "path", type: "string" },
+      { name: "content_type", type: "string" },
+      { name: "bytes", type: "number" },
+      { name: "width", type: "number" },
+      { name: "height", type: "number" },
+      { name: "zoom", type: "number" },
+      { name: "rendered_center_latitude", type: "number" },
+      { name: "rendered_center_longitude", type: "number" },
+      { name: "markers", type: "number" },
+      { name: "tiles", type: "number" },
+    ],
+    keyColumns: [
+      { name: "center_latitude", required: "optional" },
+      { name: "center_longitude", required: "optional" },
+      { name: "zoom", required: "optional" },
+      { name: "width", required: "optional" },
+      { name: "height", required: "optional" },
+      { name: "markers_json", required: "optional" },
+      { name: "output_dir", required: "optional" },
+      { name: "filename", required: "optional" },
+      { name: "tile_url_template", required: "optional" },
+    ],
+    async *list(ctx) {
+      const latitude = qualNum(ctx, "center_latitude");
+      const longitude = qualNum(ctx, "center_longitude");
+      const markers = qualMarkers(ctx);
+      if ((latitude === undefined || longitude === undefined) && markers.length === 0) return;
+      const result = await createStaticMapImage({
+        center:
+          latitude === undefined || longitude === undefined
+            ? undefined
+            : { latitude, longitude },
+        markers,
+        zoom: qualNum(ctx, "zoom"),
+        width: qualNum(ctx, "width"),
+        height: qualNum(ctx, "height"),
+        outputDir: qual(ctx, "output_dir"),
+        filename: qual(ctx, "filename"),
+        tileUrlTemplate: qual(ctx, "tile_url_template"),
+      });
+      yield {
+        path: result.path,
+        content_type: result.contentType,
+        bytes: result.bytes,
+        width: result.width,
+        height: result.height,
+        zoom: result.zoom,
+        rendered_center_latitude: result.center.latitude,
+        rendered_center_longitude: result.center.longitude,
+        markers: result.markers,
+        tiles: result.tiles,
+      };
+    },
+  });
+
+  dl.registerTable("navily_media_download", {
+    description:
+      "Download a Navily photo/media URL through the host using the shared Navily cookie session.",
+    columns: [
+      { name: "path", type: "string" },
+      { name: "content_type", type: "string" },
+      { name: "bytes", type: "number" },
+      { name: "url", type: "string" },
+    ],
+    keyColumns: [
+      { name: "media_url", required: "required" },
+      { name: "output_dir", required: "optional" },
+      { name: "filename", required: "optional" },
+    ],
+    async *list(ctx) {
+      const url = qual(ctx, "media_url");
+      if (!url) return;
+      const result = await downloadMedia(getClient(ctx), {
+        url,
+        outputDir: qual(ctx, "output_dir"),
+        filename: qual(ctx, "filename"),
+      });
+      yield {
+        path: result.path,
+        content_type: result.contentType,
+        bytes: result.bytes,
+        url: result.url,
+      };
     },
   });
 

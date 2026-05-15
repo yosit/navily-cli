@@ -21,6 +21,7 @@
     "build:all": "pnpm run build && pnpm run build:plugins",
     "prepare": "pnpm run build:all",
     "test": "vitest run",
+    "test:live": "NAVILY_LIVE_TESTS=1 vitest run tests/live-aegina.test.ts",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
     "lint:plugins": "pnpm --filter runline-plugin-navily lint && pnpm --filter dripline-plugin-navily lint",
@@ -36,7 +37,7 @@
     "marina",
     "cli"
   ],
-  "author": "yosit <yosi@taguri.com>",
+  "author": "yosit",
   "license": "MIT",
   "packageManager": "pnpm@10.28.0",
   "engines": {

@@ -84,6 +84,13 @@ export class NotFoundError extends NavilyError {
   }
 }
 
+export interface BinaryDownload {
+  body: Buffer;
+  contentType: string;
+  status: number;
+  url: string;
+}
+
 export interface NavilyClientOptions {
   timeout?: number;
   referer?: string;
@@ -258,6 +265,89 @@ export class NavilyClient {
     const cookie = await ensureFreshCookie({ force, onStep: this.onAuthStep });
     this.cookie = cookie;
     this.xsrf = getXsrfToken(cookie);
+  }
+
+  /** Fetch a binary media URL with the current navily session cookie. */
+  async downloadBinary(url: string): Promise<BinaryDownload> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await this.ensureCookie(attempt === 1);
+      const headers = this.baseHeaders();
+      headers.Accept = "image/webp,image/jpeg,image/png,image/svg+xml,application/pdf,*/*;q=0.8";
+      headers["Sec-Fetch-Dest"] = "image";
+      headers["Sec-Fetch-Mode"] = "no-cors";
+      delete headers["X-Requested-With"];
+      delete headers["X-XSRF-TOKEN"];
+
+      let res: CycleTLSResponse;
+      try {
+        res = await this.sendWithCycleTlsRetry(
+          url,
+          {
+            body: "",
+            ja3: CHROME_JA3,
+            userAgent: CHROME_UA,
+            headers,
+            timeout: Math.ceil(this.timeout / 1000),
+          },
+          "get",
+        );
+      } catch (e) {
+        throw new NavilyError(`Media download failed: ${errorMessage(e)}`, { url });
+      }
+
+      try {
+        const contentType = headerValue(res.headers, "content-type") ?? "application/octet-stream";
+        const raw = res.body;
+        const text = typeof raw === "string" ? raw : JSON.stringify(raw);
+
+        if (res.status === 403 && text.includes("Just a moment")) {
+          throw new CloudflareBlockedError(
+            "Cloudflare challenge — your session cookie is expired or rejected.",
+            { status: res.status, url },
+          );
+        }
+        if (res.status === 419) {
+          throw new NavilyAuthError(
+            "CSRF token mismatch (419). Your XSRF-TOKEN cookie is stale — refresh and re-export.",
+            { status: res.status, url },
+          );
+        }
+        if (res.status === 401) {
+          throw new NavilyAuthError("Unauthenticated (401). Re-export your cookie.", {
+            status: res.status,
+            url,
+          });
+        }
+        if (res.status >= 400) {
+          throw new NavilyError(`Media download HTTP ${res.status}: ${text.slice(0, 300)}`, {
+            status: res.status,
+            url,
+            body: text.slice(0, 500),
+          });
+        }
+        if (typeof raw !== "string") {
+          throw new NavilyError("Media download returned a non-binary JSON response.", {
+            status: res.status,
+            url,
+            body: raw,
+          });
+        }
+
+        return {
+          body: Buffer.from(raw, isBase64EncodedBody(contentType) ? "base64" : "utf8"),
+          contentType,
+          status: res.status,
+          url: res.finalUrl || url,
+        };
+      } catch (e) {
+        if (attempt === 0 && this.canRefreshAfter(e)) {
+          continue;
+        }
+        throw e;
+      }
+    }
+
+    throw new NavilyAuthError("Auth retry failed.", { url });
   }
 
   private canRefreshAfter(e: unknown): boolean {
@@ -512,4 +602,26 @@ function errorMessage(e: unknown): string {
   if (e instanceof Error && e.message) return e.message;
   if (typeof e === "string") return e;
   try { return JSON.stringify(e); } catch { return String(e); }
+}
+
+function headerValue(headers: Record<string, unknown>, name: string): string | undefined {
+  const lowerName = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers ?? {})) {
+    if (key.toLowerCase() === lowerName && value !== undefined && value !== null) {
+      return String(value);
+    }
+  }
+  return undefined;
+}
+
+function isBase64EncodedBody(contentType: string): boolean {
+  const clean = contentType.split(";")[0]?.trim().toLowerCase();
+  return (
+    clean === "image/svg+xml" ||
+    clean === "image/webp" ||
+    clean === "image/jpeg" ||
+    clean === "image/jpg" ||
+    clean === "image/png" ||
+    clean === "application/pdf"
+  );
 }

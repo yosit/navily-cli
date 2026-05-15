@@ -14,7 +14,12 @@
  * ~/.config/navily/cookie -> NAVILY_EMAIL/NAVILY_PASSWORD auto-auth.
  */
 import type { ActionContext, RunlinePluginAPI } from "runline";
-import { NavilyClient } from "@yosit/navily-cli";
+import {
+  createStaticMapImage,
+  downloadMedia,
+  NavilyClient,
+  type StaticMapMarker,
+} from "@yosit/navily-cli";
 
 // Reuse clients for the life of the process. The default auto-auth client
 // shares ~/.config/navily/cookie with the CLI and uses the lock file there,
@@ -68,6 +73,50 @@ function optNum(input: unknown, key: string): number | undefined {
   if (typeof v === "number" && Number.isFinite(v)) return v;
   if (typeof v === "string" && v.trim() !== "") {
     const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
+}
+
+function optCenter(input: unknown): { latitude: number; longitude: number } | undefined {
+  const latitude = optNum(input, "latitude") ?? optNum(input, "centerLatitude");
+  const longitude = optNum(input, "longitude") ?? optNum(input, "centerLongitude");
+  return latitude === undefined || longitude === undefined
+    ? undefined
+    : { latitude, longitude };
+}
+
+function markers(input: unknown): StaticMapMarker[] {
+  const record = (input as Record<string, unknown>) ?? {};
+  const raw = record.markers ?? record.markersJson;
+  if (raw === undefined || raw === null || raw === "") return [];
+  const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+  if (!Array.isArray(parsed)) {
+    throw new Error("markers must be an array or markersJson must be a JSON array");
+  }
+  return parsed.map((item, index) => {
+    if (!item || typeof item !== "object") {
+      throw new Error(`markers[${index}] must be an object`);
+    }
+    const row = item as Record<string, unknown>;
+    const latitude = valueNum(row.latitude ?? row.lat);
+    const longitude = valueNum(row.longitude ?? row.lng ?? row.lon);
+    if (latitude === undefined || longitude === undefined) {
+      throw new Error(`markers[${index}] must include latitude and longitude`);
+    }
+    return {
+      latitude,
+      longitude,
+      label: typeof row.label === "string" ? row.label : undefined,
+      color: typeof row.color === "string" ? row.color : undefined,
+    };
+  });
+}
+
+function valueNum(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const n = Number(value);
     if (Number.isFinite(n)) return n;
   }
   return undefined;
@@ -179,6 +228,68 @@ export default function navily(rl: RunlinePluginAPI): void {
         optNum(input, "distanceM") ?? 25_000,
         optStr(input, "kinds"),
       );
+    },
+  });
+
+  // ── rendered assets ─────────────────────────────────────────────────
+
+  rl.registerAction("map.staticImage", {
+    description:
+      "Render a static SVG map with OSM tiles and optional markers. Writes an image file and returns {path, contentType, bytes}.",
+    inputSchema: {
+      latitude: { type: "number", required: false, description: "center latitude" },
+      longitude: { type: "number", required: false, description: "center longitude" },
+      zoom: { type: "number", required: false, description: "web mercator zoom, 1-19 (default 13)" },
+      width: { type: "number", required: false, description: "image width px, 128-4096 (default 1024)" },
+      height: { type: "number", required: false, description: "image height px, 128-4096 (default 768)" },
+      markersJson: {
+        type: "string",
+        required: false,
+        description:
+          "JSON array of {latitude,longitude,label?,color?}. If center is omitted, markers are averaged for the center.",
+      },
+      markers: {
+        type: "object" as const,
+        required: false,
+        description: "Array of {latitude,longitude,label?,color?}; markersJson is safer across strict runtimes.",
+      },
+      outputDir: { type: "string", required: false, description: "output directory (default NAVILY_OUTPUT_DIR or ./navily-output)" },
+      filename: { type: "string", required: false, description: "output filename (default timestamped .svg)" },
+      tileUrlTemplate: {
+        type: "string",
+        required: false,
+        description:
+          "tile URL template with {z}/{x}/{y}; defaults to OSM or NAVILY_TILE_URL_TEMPLATE",
+      },
+    },
+    async execute(input) {
+      return createStaticMapImage({
+        center: optCenter(input),
+        markers: markers(input),
+        zoom: optNum(input, "zoom"),
+        width: optNum(input, "width"),
+        height: optNum(input, "height"),
+        outputDir: optStr(input, "outputDir"),
+        filename: optStr(input, "filename"),
+        tileUrlTemplate: optStr(input, "tileUrlTemplate"),
+      });
+    },
+  });
+
+  rl.registerAction("media.download", {
+    description:
+      "Download a Navily photo/media URL through the host using the shared Navily cookie session. Writes the bytes and returns {path, contentType, bytes}.",
+    inputSchema: {
+      url: { type: "string", required: true, description: "Navily photo/media URL" },
+      outputDir: { type: "string", required: false, description: "output directory (default NAVILY_OUTPUT_DIR or ./navily-output)" },
+      filename: { type: "string", required: false, description: "output filename; extension inferred from content type if missing" },
+    },
+    async execute(input, ctx) {
+      return downloadMedia(getClient(ctx), {
+        url: str(input, "url"),
+        outputDir: optStr(input, "outputDir"),
+        filename: optStr(input, "filename"),
+      });
     },
   });
 
