@@ -146,7 +146,7 @@ function valueNum(value: unknown): number | undefined {
 
 export default function navily(rl: RunlinePluginAPI): void {
   rl.setName("navily");
-  rl.setVersion("0.2.0");
+  rl.setVersion("0.3.1");
   rl.setConnectionSchema({
     cookie: {
       type: "string",

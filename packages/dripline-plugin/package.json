@@ -1,6 +1,6 @@
 {
   "name": "dripline-plugin-navily",
-  "version": "0.2.0",
+  "version": "0.3.1",
   "description": "navily.com plugin for dripline — query marinas, anchorages, weather, reviews, regions, bookings as SQL tables",
   "type": "module",
   "main": "dist/index.js",

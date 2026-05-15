@@ -1,6 +1,6 @@
 {
   "name": "@yosit/navily-cli",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "CLI for navily.com (marinas, anchorages, weather, bookings)",
   "type": "module",
   "main": "dist/index.js",

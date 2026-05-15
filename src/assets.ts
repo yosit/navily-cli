@@ -6,7 +6,7 @@ import { WEB_BASE } from "./client.js";
 const TILE_SIZE = 256;
 const DEFAULT_TILE_URL_TEMPLATE =
   "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
-const USER_AGENT = "navily-cli/0.3.0 (+https://github.com/yosit/navily-cli)";
+const USER_AGENT = "navily-cli/0.3.1 (+https://github.com/yosit/navily-cli)";
 const MAX_MERCATOR_LATITUDE = 85.05112878;
 
 export type StaticMapTileProvider =
