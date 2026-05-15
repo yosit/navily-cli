@@ -14,6 +14,7 @@ import type { DriplinePluginAPI, QueryContext } from "dripline";
 import {
   createStaticMapImage,
   downloadMedia,
+  downloadStaticMapThumbnail,
   NavilyClient,
   type StaticMapMarker,
 } from "@yosit/navily-cli";
@@ -58,6 +59,18 @@ function qualNum(ctx: QueryContext, name: string): number | undefined {
   if (s === undefined) return undefined;
   const n = Number(s);
   return Number.isFinite(n) ? n : undefined;
+}
+
+function paginationOpts(ctx: QueryContext): {
+  page?: number;
+  perPage?: number;
+  maxPages?: number;
+} {
+  return {
+    page: qualNum(ctx, "page"),
+    perPage: qualNum(ctx, "per_page"),
+    maxPages: qualNum(ctx, "max_pages"),
+  };
 }
 
 function qualMarkers(ctx: QueryContext): StaticMapMarker[] {
@@ -130,7 +143,7 @@ const B = (v: unknown): number => (v ? 1 : 0);
 
 export default function navily(dl: DriplinePluginAPI): void {
   dl.setName("navily");
-  dl.setVersion("0.1.0");
+  dl.setVersion("0.2.0");
   dl.setConnectionSchema({
     cookie: {
       type: "string",
@@ -469,6 +482,8 @@ export default function navily(dl: DriplinePluginAPI): void {
       { name: "rendered_center_longitude", type: "number" },
       { name: "markers", type: "number" },
       { name: "tiles", type: "number" },
+      { name: "tile_provider", type: "string" },
+      { name: "attribution", type: "string" },
     ],
     keyColumns: [
       { name: "center_latitude", required: "optional" },
@@ -480,6 +495,8 @@ export default function navily(dl: DriplinePluginAPI): void {
       { name: "output_dir", required: "optional" },
       { name: "filename", required: "optional" },
       { name: "tile_url_template", required: "optional" },
+      { name: "tile_provider", required: "optional" },
+      { name: "tile_api_key", required: "optional" },
     ],
     async *list(ctx) {
       const latitude = qualNum(ctx, "center_latitude");
@@ -498,6 +515,8 @@ export default function navily(dl: DriplinePluginAPI): void {
         outputDir: qual(ctx, "output_dir"),
         filename: qual(ctx, "filename"),
         tileUrlTemplate: qual(ctx, "tile_url_template"),
+        tileProvider: qual(ctx, "tile_provider"),
+        tileApiKey: qual(ctx, "tile_api_key"),
       });
       yield {
         path: result.path,
@@ -510,6 +529,41 @@ export default function navily(dl: DriplinePluginAPI): void {
         rendered_center_longitude: result.center.longitude,
         markers: result.markers,
         tiles: result.tiles,
+        tile_provider: result.tileProvider,
+        attribution: result.attribution,
+      };
+    },
+  });
+
+  dl.registerTable("navily_static_thumbnail", {
+    description: "Download Navily's cached 460x250 static map thumbnail for a coordinate.",
+    columns: [
+      { name: "path", type: "string" },
+      { name: "content_type", type: "string" },
+      { name: "bytes", type: "number" },
+      { name: "url", type: "string" },
+    ],
+    keyColumns: [
+      { name: "latitude", required: "required" },
+      { name: "longitude", required: "required" },
+      { name: "output_dir", required: "optional" },
+      { name: "filename", required: "optional" },
+    ],
+    async *list(ctx) {
+      const latitude = qualNum(ctx, "latitude");
+      const longitude = qualNum(ctx, "longitude");
+      if (latitude === undefined || longitude === undefined) return;
+      const result = await downloadStaticMapThumbnail({
+        latitude,
+        longitude,
+        outputDir: qual(ctx, "output_dir"),
+        filename: qual(ctx, "filename"),
+      });
+      yield {
+        path: result.path,
+        content_type: result.contentType,
+        bytes: result.bytes,
+        url: result.url,
       };
     },
   });
@@ -686,7 +740,7 @@ export default function navily(dl: DriplinePluginAPI): void {
   });
 
   dl.registerTable("navily_port_comments", {
-    description: "Reviews on a marina — /ports/{id}/comments (page 1)",
+    description: "Reviews on a marina — /ports/{id}/comments. Fetches all pages unless page is provided.",
     columns: [
       { name: "id", type: "number" },
       { name: "port_id", type: "number" },
@@ -694,11 +748,19 @@ export default function navily(dl: DriplinePluginAPI): void {
       { name: "message_translated", type: "string" },
       { name: "raw", type: "json" },
     ],
-    keyColumns: [{ name: "port_id", required: "required" }],
+    keyColumns: [
+      { name: "port_id", required: "required" },
+      { name: "page", required: "optional" },
+      { name: "per_page", required: "optional" },
+      { name: "max_pages", required: "optional" },
+    ],
     async *list(ctx) {
       const id = qualNum(ctx, "port_id");
       if (id === undefined) return;
-      const resp = await getClient(ctx).portComments(id);
+      const opts = paginationOpts(ctx);
+      const resp = opts.page === undefined
+        ? await getClient(ctx).portCommentsAll(id, opts)
+        : await getClient(ctx).portComments(id, opts);
       for (const c of rows(resp)) {
         const msg = (c.message ?? {}) as Record<string, unknown>;
         yield {
@@ -713,7 +775,7 @@ export default function navily(dl: DriplinePluginAPI): void {
   });
 
   dl.registerTable("navily_port_photos", {
-    description: "Photos on a marina — /ports/{id}/photos (page 1)",
+    description: "Photos on a marina — /ports/{id}/photos. Fetches all pages unless page is provided.",
     columns: [
       { name: "id", type: "number" },
       { name: "port_id", type: "number" },
@@ -727,11 +789,19 @@ export default function navily(dl: DriplinePluginAPI): void {
       { name: "created_at", type: "datetime" },
       { name: "raw", type: "json" },
     ],
-    keyColumns: [{ name: "port_id", required: "required" }],
+    keyColumns: [
+      { name: "port_id", required: "required" },
+      { name: "page", required: "optional" },
+      { name: "per_page", required: "optional" },
+      { name: "max_pages", required: "optional" },
+    ],
     async *list(ctx) {
       const id = qualNum(ctx, "port_id");
       if (id === undefined) return;
-      const resp = await getClient(ctx).portPhotos(id);
+      const opts = paginationOpts(ctx);
+      const resp = opts.page === undefined
+        ? await getClient(ctx).portPhotosAll(id, opts)
+        : await getClient(ctx).portPhotos(id, opts);
       for (const m of rows(resp)) {
         const size = (m.size ?? {}) as Record<string, unknown>;
         const counts = (m.counts ?? {}) as Record<string, unknown>;
@@ -949,7 +1019,7 @@ export default function navily(dl: DriplinePluginAPI): void {
   });
 
   dl.registerTable("navily_mooring_comments", {
-    description: "Reviews on an anchorage — /moorings/{id}/comments (page 1)",
+    description: "Reviews on an anchorage — /moorings/{id}/comments. Fetches all pages unless page is provided.",
     columns: [
       { name: "id", type: "number" },
       { name: "mooring_id", type: "number" },
@@ -957,11 +1027,19 @@ export default function navily(dl: DriplinePluginAPI): void {
       { name: "message_translated", type: "string" },
       { name: "raw", type: "json" },
     ],
-    keyColumns: [{ name: "mooring_id", required: "required" }],
+    keyColumns: [
+      { name: "mooring_id", required: "required" },
+      { name: "page", required: "optional" },
+      { name: "per_page", required: "optional" },
+      { name: "max_pages", required: "optional" },
+    ],
     async *list(ctx) {
       const id = qualNum(ctx, "mooring_id");
       if (id === undefined) return;
-      const resp = await getClient(ctx).mooringComments(id);
+      const opts = paginationOpts(ctx);
+      const resp = opts.page === undefined
+        ? await getClient(ctx).mooringCommentsAll(id, opts)
+        : await getClient(ctx).mooringComments(id, opts);
       for (const c of rows(resp)) {
         const msg = (c.message ?? {}) as Record<string, unknown>;
         yield {
@@ -976,7 +1054,7 @@ export default function navily(dl: DriplinePluginAPI): void {
   });
 
   dl.registerTable("navily_mooring_photos", {
-    description: "Photos on an anchorage — /moorings/{id}/photos (page 1)",
+    description: "Photos on an anchorage — /moorings/{id}/photos. Fetches all pages unless page is provided.",
     columns: [
       { name: "id", type: "number" },
       { name: "mooring_id", type: "number" },
@@ -990,11 +1068,19 @@ export default function navily(dl: DriplinePluginAPI): void {
       { name: "created_at", type: "datetime" },
       { name: "raw", type: "json" },
     ],
-    keyColumns: [{ name: "mooring_id", required: "required" }],
+    keyColumns: [
+      { name: "mooring_id", required: "required" },
+      { name: "page", required: "optional" },
+      { name: "per_page", required: "optional" },
+      { name: "max_pages", required: "optional" },
+    ],
     async *list(ctx) {
       const id = qualNum(ctx, "mooring_id");
       if (id === undefined) return;
-      const resp = await getClient(ctx).mooringPhotos(id);
+      const opts = paginationOpts(ctx);
+      const resp = opts.page === undefined
+        ? await getClient(ctx).mooringPhotosAll(id, opts)
+        : await getClient(ctx).mooringPhotos(id, opts);
       for (const m of rows(resp)) {
         const size = (m.size ?? {}) as Record<string, unknown>;
         const counts = (m.counts ?? {}) as Record<string, unknown>;
@@ -1097,7 +1183,7 @@ export default function navily(dl: DriplinePluginAPI): void {
   }
 
   dl.registerTable("navily_regions", {
-    description: "Global region index — /regions (page 1)",
+    description: "Global region index — /regions. Fetches all pages unless page is provided.",
     columns: [
       { name: "id", type: "number" },
       { name: "name", type: "string" },
@@ -1108,8 +1194,16 @@ export default function navily(dl: DriplinePluginAPI): void {
       { name: "longitude", type: "number" },
       { name: "raw", type: "json" },
     ],
+    keyColumns: [
+      { name: "page", required: "optional" },
+      { name: "per_page", required: "optional" },
+      { name: "max_pages", required: "optional" },
+    ],
     async *list(ctx) {
-      const resp = await getClient(ctx).regions();
+      const opts = paginationOpts(ctx);
+      const resp = opts.page === undefined
+        ? await getClient(ctx).regionsAll(opts)
+        : await getClient(ctx).regions(opts);
       for (const r of rows(resp)) {
         const coord = (r.coordinate ?? {}) as Record<string, unknown>;
         const country = (r.country ?? {}) as Record<string, unknown>;
@@ -1160,15 +1254,23 @@ export default function navily(dl: DriplinePluginAPI): void {
   });
 
   dl.registerTable("navily_region_ports", {
-    description: "Marinas in a region — /regions/{id}/ports (page 1)",
+    description: "Marinas in a region — /regions/{id}/ports. Fetches all pages unless page is provided.",
     columns: portColumns.map((c) =>
       c.name === "id" ? c : c,
     ).concat([{ name: "region_id", type: "number" as const }]),
-    keyColumns: [{ name: "region_id", required: "required" }],
+    keyColumns: [
+      { name: "region_id", required: "required" },
+      { name: "page", required: "optional" },
+      { name: "per_page", required: "optional" },
+      { name: "max_pages", required: "optional" },
+    ],
     async *list(ctx) {
       const id = qualNum(ctx, "region_id");
       if (id === undefined) return;
-      const resp = await getClient(ctx).regionPorts(id);
+      const opts = paginationOpts(ctx);
+      const resp = opts.page === undefined
+        ? await getClient(ctx).regionPortsAll(id, opts)
+        : await getClient(ctx).regionPorts(id, opts);
       for (const p of rows(resp)) {
         yield { ...portRow(p), region_id: id };
       }
@@ -1176,15 +1278,23 @@ export default function navily(dl: DriplinePluginAPI): void {
   });
 
   dl.registerTable("navily_region_moorings", {
-    description: "Anchorages in a region — /regions/{id}/moorings (page 1)",
+    description: "Anchorages in a region — /regions/{id}/moorings. Fetches all pages unless page is provided.",
     columns: mooringColumns.concat([
       { name: "region_id", type: "number" as const },
     ]),
-    keyColumns: [{ name: "region_id", required: "required" }],
+    keyColumns: [
+      { name: "region_id", required: "required" },
+      { name: "page", required: "optional" },
+      { name: "per_page", required: "optional" },
+      { name: "max_pages", required: "optional" },
+    ],
     async *list(ctx) {
       const id = qualNum(ctx, "region_id");
       if (id === undefined) return;
-      const resp = await getClient(ctx).regionMoorings(id);
+      const opts = paginationOpts(ctx);
+      const resp = opts.page === undefined
+        ? await getClient(ctx).regionMooringsAll(id, opts)
+        : await getClient(ctx).regionMoorings(id, opts);
       for (const m of rows(resp)) {
         yield { ...mooringRow(m), region_id: id };
       }
@@ -1250,17 +1360,25 @@ export default function navily(dl: DriplinePluginAPI): void {
   });
 
   dl.registerTable("navily_list_comments", {
-    description: "Comments on a list — /lists/{id}/comments (page 1)",
+    description: "Comments on a list — /lists/{id}/comments. Fetches all pages unless page is provided.",
     columns: [
       { name: "list_id", type: "number" },
       { name: "id", type: "number" },
       { name: "raw", type: "json" },
     ],
-    keyColumns: [{ name: "list_id", required: "required" }],
+    keyColumns: [
+      { name: "list_id", required: "required" },
+      { name: "page", required: "optional" },
+      { name: "per_page", required: "optional" },
+      { name: "max_pages", required: "optional" },
+    ],
     async *list(ctx) {
       const id = qualNum(ctx, "list_id");
       if (id === undefined) return;
-      const resp = await getClient(ctx).listComments(id);
+      const opts = paginationOpts(ctx);
+      const resp = opts.page === undefined
+        ? await getClient(ctx).listCommentsAll(id, opts)
+        : await getClient(ctx).listComments(id, opts);
       for (const c of rows(resp)) {
         yield { list_id: id, id: N(c.id), raw: J(c) };
       }

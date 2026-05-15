@@ -119,14 +119,17 @@ share the minted cookie instead of racing multiple login handshakes.
 
 ### Rendered assets
 
-- `navily_map_static_image(center_latitude?, center_longitude?[, zoom, width, height, markers_json, output_dir, filename, tile_url_template])` — writes a static SVG map and returns its file path and metadata. Pass coordinates as strings.
+- `navily_map_static_image(center_latitude?, center_longitude?[, zoom, width, height, markers_json, output_dir, filename, tile_provider, tile_api_key, tile_url_template])` — writes a static SVG map and returns its file path and metadata. Pass coordinates as strings.
+- `navily_static_thumbnail(latitude, longitude[, output_dir, filename])` — downloads Navily's cached 460x250 map thumbnail when present, otherwise writes a generated SVG fallback.
 - `navily_media_download(media_url[, output_dir, filename])` — downloads a Navily photo/media URL through the host session and returns its file path and metadata.
 
 `markers_json` is a JSON array of `{ "latitude": 37.74, "longitude": 23.43, "label": "Aegina Marina" }`.
 If `center_latitude`/`center_longitude` are omitted, the map centers on the
-average marker coordinate. Tiles default to OpenStreetMap; set
-`NAVILY_TILE_URL_TEMPLATE` or pass `tile_url_template` with `{z}`, `{x}`, and
-`{y}` placeholders for a different tile provider.
+average marker coordinate. Tiles default to OpenStreetMap. For satellite, pass
+`tile_provider = 'esriWorldImagery'` (no key), `maptilerSatellite`, or
+`mapboxSatellite`; MapTiler/Mapbox require `tile_api_key` or provider env vars.
+You can also set `NAVILY_TILE_URL_TEMPLATE` or pass `tile_url_template` with
+`{z}`, `{x}`, and `{y}` placeholders.
 
 ```sql
 SELECT path, content_type, bytes
@@ -148,8 +151,8 @@ WHERE media_url = 'https://www.navily.com/mediaRouter/...'
 - `navily_port(id)` — full marina detail.
 - `navily_port_with_media(id)` — marina with photos/equipments/hours.
 - `navily_port_price_tonight(port_id)` — tonight's berth price (marinas only).
-- `navily_port_comments(port_id)` — reviews (page 1).
-- `navily_port_photos(port_id)` — photos (page 1).
+- `navily_port_comments(port_id[, page, per_page, max_pages])` — reviews. Fetches all pages unless `page` is provided.
+- `navily_port_photos(port_id[, page, per_page, max_pages])` — photos. Fetches all pages unless `page` is provided.
 - `navily_port_equipments(port_id)` — water/electricity/fuel/wifi/etc.
 - `navily_port_weather(port_id)` — 33-entry forecast.
 - `navily_port_shops(port_id)` — nearby shops.
@@ -158,24 +161,24 @@ WHERE media_url = 'https://www.navily.com/mediaRouter/...'
 ### Moorings (anchorages)
 
 - `navily_mooring(id)` — full anchorage detail.
-- `navily_mooring_comments(mooring_id)` — reviews (page 1).
-- `navily_mooring_photos(mooring_id)` — photos (page 1).
+- `navily_mooring_comments(mooring_id[, page, per_page, max_pages])` — reviews. Fetches all pages unless `page` is provided.
+- `navily_mooring_photos(mooring_id[, page, per_page, max_pages])` — photos. Fetches all pages unless `page` is provided.
 - `navily_mooring_weather(mooring_id)` — forecast with wind/wave protection scores.
 - `navily_mooring_shops(mooring_id)` — nearby shops.
 
 ### Regions
 
-- `navily_regions` — global region index (page 1).
+- `navily_regions([page, per_page, max_pages])` — global region index. Fetches all pages unless `page` is provided.
 - `navily_region(id)` — region detail.
-- `navily_region_ports(region_id)` — marinas in a region (page 1).
-- `navily_region_moorings(region_id)` — anchorages in a region (page 1).
+- `navily_region_ports(region_id[, page, per_page, max_pages])` — marinas in a region. Fetches all pages unless `page` is provided.
+- `navily_region_moorings(region_id[, page, per_page, max_pages])` — anchorages in a region. Fetches all pages unless `page` is provided.
 
 ### Personal
 
 - `navily_boats` — your boats.
 - `navily_lists` — your favourites lists.
 - `navily_list_entries(list_id)` — places in a list.
-- `navily_list_comments(list_id)` — comments on a list (page 1).
+- `navily_list_comments(list_id[, page, per_page, max_pages])` — comments on a list. Fetches all pages unless `page` is provided.
 - `navily_cards` — payment cards.
 - `navily_notifications` — notifications.
 - `navily_demands` — booking demands.
@@ -188,8 +191,8 @@ WHERE media_url = 'https://www.navily.com/mediaRouter/...'
 
 ## Notes
 
-- Tables marked "(page 1)" only fetch the first Laravel page. Pagination
-  loops aren't wired through `NavilyClient` yet.
+- Paginated tables fetch all pages by default. Add `page = N` to fetch a
+  single page, or `max_pages = N` to cap aggregation.
 - Each row also carries a `raw` JSON column with the unmodified upstream
   payload, so you can `SELECT raw->'$.permissions' FROM navily_port WHERE id=…`
   to reach fields the plugin doesn't surface explicitly.

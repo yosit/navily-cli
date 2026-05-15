@@ -124,14 +124,17 @@ share the minted cookie instead of racing multiple login handshakes.
 
 ### Rendered assets
 
-- `map.staticImage({ latitude?, longitude?, zoom?, width?, height?, markersJson?, outputDir?, filename?, tileUrlTemplate? })` → writes a static SVG map and returns `{ path, contentType, bytes }`.
+- `map.staticImage({ latitude?, longitude?, zoom?, width?, height?, markersJson?, outputDir?, filename?, tileProvider?, tileApiKey?, tileUrlTemplate? })` → writes a static SVG map and returns `{ path, contentType, bytes }`.
+- `map.staticThumbnail({ latitude, longitude, outputDir?, filename? })` → downloads Navily's cached 460x250 map thumbnail when present, otherwise writes a generated SVG fallback.
 - `media.download({ url, outputDir?, filename? })` → downloads a Navily photo/media URL through the host session and returns `{ path, contentType, bytes }`.
 
 `markersJson` is a JSON array of `{ "latitude": 37.74, "longitude": 23.43, "label": "Aegina Marina" }`.
 If `latitude`/`longitude` are omitted, the map centers on the average marker
-coordinate. Tiles default to OpenStreetMap; set `NAVILY_TILE_URL_TEMPLATE` or
-pass `tileUrlTemplate` with `{z}`, `{x}`, and `{y}` placeholders for a different
-tile provider.
+coordinate. Tiles default to OpenStreetMap. For satellite, pass
+`tileProvider: "esriWorldImagery"` (no key), `maptilerSatellite`, or
+`mapboxSatellite`; MapTiler/Mapbox require `tileApiKey` or provider env vars.
+You can also set `NAVILY_TILE_URL_TEMPLATE` or pass `tileUrlTemplate` with
+`{z}`, `{x}`, and `{y}` placeholders.
 
 ```js
 const hits = await navily.search.map({
@@ -153,6 +156,7 @@ const map = await navily.map.staticImage({
   zoom: 12,
   markersJson: JSON.stringify(markers),
   filename: "aegina-navily-map.svg",
+  tileProvider: "esriWorldImagery",
 });
 
 const photos = await navily.port.listPhotos({ portId: hits.results[0].id });
@@ -170,8 +174,8 @@ return { mapPath: map.path, photoPath: photo.path };
 - `port.getWithMedia({ portId })` — incl. photos/equipments/hours.
 - `port.getPriceTonight({ portId })` — marinas only; anchorages return 500.
 - `port.getMyComment({ portId })` — current user's own review.
-- `port.listComments({ portId })`
-- `port.listPhotos({ portId })`
+- `port.listComments({ portId, page?, perPage?, allPages?, maxPages? })`
+- `port.listPhotos({ portId, page?, perPage?, allPages?, maxPages? })`
 - `port.listEquipments({ portId })`
 - `port.getWeather({ portId })` — 33-entry forecast.
 - `port.listShops({ portId })`
@@ -184,22 +188,22 @@ return { mapPath: map.path, photoPath: photo.path };
 ### Moorings (anchorages)
 
 - `mooring.get({ mooringId })`
-- `mooring.listComments({ mooringId })`
-- `mooring.listPhotos({ mooringId })`
+- `mooring.listComments({ mooringId, page?, perPage?, allPages?, maxPages? })`
+- `mooring.listPhotos({ mooringId, page?, perPage?, allPages?, maxPages? })`
 - `mooring.getWeather({ mooringId })` — incl. wind/wave protection scores.
 - `mooring.listShops({ mooringId })`
 
 ### Regions
 
-- `region.list()` — global index.
+- `region.list({ page?, perPage?, allPages?, maxPages? })` — global index.
 - `region.get({ regionId })`
-- `region.listPorts({ regionId })`
-- `region.listMoorings({ regionId })`
+- `region.listPorts({ regionId, page?, perPage?, allPages?, maxPages? })`
+- `region.listMoorings({ regionId, page?, perPage?, allPages?, maxPages? })`
 
 ### Current user
 
 - `me.listBoats()`
-- `me.listLists()` / `me.listListEntries({ listId })` / `me.listListComments({ listId })`
+- `me.listLists()` / `me.listListEntries({ listId })` / `me.listListComments({ listId, page?, perPage?, allPages?, maxPages? })`
 - `me.listCards()`
 - `me.listNotifications()` / `me.getNotificationsCount()`
 - `me.listDemands()` / `me.getDemandsInfos()` / `me.listDemandsOffers()`
@@ -235,8 +239,8 @@ The full endpoint catalog with payload notes is at
 - One `cycletls` Go subprocess is spawned lazily on first action and reused
   for the lifetime of the runline process; cookie rotation creates a new
   subprocess.
-- Tables marked "(page 1)" only fetch the first Laravel page. Pagination
-  loops aren't wired through `NavilyClient` yet.
+- Paginated actions accept `page`/`perPage`; set `allPages: true` to aggregate
+  every page, optionally capped by `maxPages`.
 
 ## License
 

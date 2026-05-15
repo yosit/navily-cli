@@ -109,6 +109,15 @@ interface ProxyBody {
   data: Record<string, unknown>;
 }
 
+export interface PaginationOptions {
+  page?: number;
+  perPage?: number;
+}
+
+export interface AllPagesOptions extends PaginationOptions {
+  maxPages?: number;
+}
+
 export class NavilyClient {
   private cookie: string | null;
   private xsrf: string;
@@ -485,6 +494,48 @@ export class NavilyClient {
     return this.request<T>("POST", "/api/proxy", { jsonBody: body });
   }
 
+  private paginated<T = unknown>(
+    path: string,
+    opts: PaginationOptions = {},
+    data: Record<string, unknown> = {},
+  ): Promise<import("./types.js").Paginated<T>> {
+    const requestData = { ...data };
+    if (opts.page !== undefined) requestData.page = positiveInteger(opts.page, "page");
+    if (opts.perPage !== undefined) requestData.per_page = positiveInteger(opts.perPage, "perPage");
+    return this.proxy<import("./types.js").Paginated<T>>(path, "get", requestData);
+  }
+
+  private async allPages<T = unknown>(
+    path: string,
+    opts: AllPagesOptions = {},
+    data: Record<string, unknown> = {},
+  ): Promise<import("./types.js").Paginated<T>> {
+    const first = await this.paginated<T>(path, { ...opts, page: opts.page ?? 1 }, data);
+    const lastPage = Number(first.meta?.last_page) || 1;
+    const maxPage = opts.maxPages === undefined
+      ? lastPage
+      : Math.min(lastPage, positiveInteger(opts.maxPages, "maxPages"));
+    const combined = [...(Array.isArray(first.data) ? first.data : [])];
+
+    for (let page = (Number(first.meta?.current_page) || 1) + 1; page <= maxPage; page += 1) {
+      const next = await this.paginated<T>(path, { ...opts, page }, data);
+      if (Array.isArray(next.data)) combined.push(...next.data);
+    }
+
+    return {
+      ...first,
+      data: combined,
+      meta: {
+        ...first.meta,
+        current_page: 1,
+        last_page: maxPage,
+        from: combined.length > 0 ? 1 : null,
+        to: combined.length > 0 ? combined.length : null,
+        total: first.meta?.total ?? combined.length,
+      },
+    };
+  }
+
   /**
    * Public escape hatch for endpoints not yet wrapped in a typed method
    * (e.g. POST writes whose payload shape is documented in
@@ -512,9 +563,21 @@ export class NavilyClient {
   /** GET /ports/{id}/comment — your own review on this marina. */
   portComment(portId: number) { return this.proxy(`/ports/${portId}/comment`); }
   /** GET /ports/{id}/comments — paginated reviews. */
-  portComments(portId: number) { return this.proxy(`/ports/${portId}/comments`); }
+  portComments(portId: number, opts: PaginationOptions = {}) {
+    return this.paginated(`/ports/${portId}/comments`, opts);
+  }
+  /** GET all pages from /ports/{id}/comments. */
+  portCommentsAll(portId: number, opts: AllPagesOptions = {}) {
+    return this.allPages(`/ports/${portId}/comments`, opts);
+  }
   /** GET /ports/{id}/photos — paginated photos. */
-  portPhotos(portId: number) { return this.proxy(`/ports/${portId}/photos`); }
+  portPhotos(portId: number, opts: PaginationOptions = {}) {
+    return this.paginated(`/ports/${portId}/photos`, opts);
+  }
+  /** GET all pages from /ports/{id}/photos. */
+  portPhotosAll(portId: number, opts: AllPagesOptions = {}) {
+    return this.allPages(`/ports/${portId}/photos`, opts);
+  }
   /** GET /ports/{id}/equipments — fuel, water, electricity, wifi, etc. */
   portEquipments(portId: number) {
     return this.proxy<import("./types.js").Equipment[]>(`/ports/${portId}/equipments`);
@@ -532,9 +595,21 @@ export class NavilyClient {
   /** GET /moorings/{id} — full anchorage detail. */
   mooring(mooringId: number) { return this.proxy(`/moorings/${mooringId}`); }
   /** GET /moorings/{id}/comments — paginated reviews. */
-  mooringComments(mooringId: number) { return this.proxy(`/moorings/${mooringId}/comments`); }
+  mooringComments(mooringId: number, opts: PaginationOptions = {}) {
+    return this.paginated(`/moorings/${mooringId}/comments`, opts);
+  }
+  /** GET all pages from /moorings/{id}/comments. */
+  mooringCommentsAll(mooringId: number, opts: AllPagesOptions = {}) {
+    return this.allPages(`/moorings/${mooringId}/comments`, opts);
+  }
   /** GET /moorings/{id}/photos — paginated photos. */
-  mooringPhotos(mooringId: number) { return this.proxy(`/moorings/${mooringId}/photos`); }
+  mooringPhotos(mooringId: number, opts: PaginationOptions = {}) {
+    return this.paginated(`/moorings/${mooringId}/photos`, opts);
+  }
+  /** GET all pages from /moorings/{id}/photos. */
+  mooringPhotosAll(mooringId: number, opts: AllPagesOptions = {}) {
+    return this.allPages(`/moorings/${mooringId}/photos`, opts);
+  }
   /** GET /moorings/{id}/weather — forecast with wind/wave-protection scores. */
   mooringWeather(mooringId: number) { return this.proxy<unknown[]>(`/moorings/${mooringId}/weather`); }
   /** GET /moorings/{id}/shops — nearby shops. */
@@ -542,13 +617,27 @@ export class NavilyClient {
 
   // Regions
   /** GET /regions — paginated global index. */
-  regions() { return this.proxy("/regions"); }
+  regions(opts: PaginationOptions = {}) { return this.paginated("/regions", opts); }
+  /** GET all pages from /regions. */
+  regionsAll(opts: AllPagesOptions = {}) { return this.allPages("/regions", opts); }
   /** GET /regions/{id} — region detail. */
   region(regionId: number) { return this.proxy(`/regions/${regionId}`); }
   /** GET /regions/{id}/ports — paginated marinas in a region. */
-  regionPorts(regionId: number) { return this.proxy(`/regions/${regionId}/ports`); }
+  regionPorts(regionId: number, opts: PaginationOptions = {}) {
+    return this.paginated(`/regions/${regionId}/ports`, opts);
+  }
+  /** GET all pages from /regions/{id}/ports. */
+  regionPortsAll(regionId: number, opts: AllPagesOptions = {}) {
+    return this.allPages(`/regions/${regionId}/ports`, opts);
+  }
   /** GET /regions/{id}/moorings — paginated anchorages in a region. */
-  regionMoorings(regionId: number) { return this.proxy(`/regions/${regionId}/moorings`); }
+  regionMoorings(regionId: number, opts: PaginationOptions = {}) {
+    return this.paginated(`/regions/${regionId}/moorings`, opts);
+  }
+  /** GET all pages from /regions/{id}/moorings. */
+  regionMooringsAll(regionId: number, opts: AllPagesOptions = {}) {
+    return this.allPages(`/regions/${regionId}/moorings`, opts);
+  }
 
   // Search (via proxy)
   /** GET /search/places — hybrid search across ports/moorings/users/shops/regions. */
@@ -579,7 +668,13 @@ export class NavilyClient {
   /** GET /lists/{id}/entries — places in a list. */
   listEntries(listId: number) { return this.proxy(`/lists/${listId}/entries`); }
   /** GET /lists/{id}/comments — paginated comments on a list. */
-  listComments(listId: number) { return this.proxy(`/lists/${listId}/comments`); }
+  listComments(listId: number, opts: PaginationOptions = {}) {
+    return this.paginated(`/lists/${listId}/comments`, opts);
+  }
+  /** GET all pages from /lists/{id}/comments. */
+  listCommentsAll(listId: number, opts: AllPagesOptions = {}) {
+    return this.allPages(`/lists/${listId}/comments`, opts);
+  }
   /** GET /cards — saved payment cards. */
   cards() { return this.proxy<unknown[]>("/cards"); }
   /** GET /notifications. */
@@ -602,6 +697,13 @@ function errorMessage(e: unknown): string {
   if (e instanceof Error && e.message) return e.message;
   if (typeof e === "string") return e;
   try { return JSON.stringify(e); } catch { return String(e); }
+}
+
+function positiveInteger(value: number, label: string): number {
+  if (!Number.isFinite(value) || value < 1) {
+    throw new NavilyError(`${label} must be a positive integer`);
+  }
+  return Math.floor(value);
 }
 
 function headerValue(headers: Record<string, unknown>, name: string): string | undefined {

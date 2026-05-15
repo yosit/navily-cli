@@ -1,12 +1,19 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, extname, join, resolve } from "node:path";
 import type { NavilyClient } from "./client.js";
+import { WEB_BASE } from "./client.js";
 
 const TILE_SIZE = 256;
 const DEFAULT_TILE_URL_TEMPLATE =
   "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const USER_AGENT = "navily-cli/0.3.0 (+https://github.com/yosit/navily-cli)";
 const MAX_MERCATOR_LATITUDE = 85.05112878;
+
+export type StaticMapTileProvider =
+  | "osm"
+  | "esriWorldImagery"
+  | "maptilerSatellite"
+  | "mapboxSatellite";
 
 export interface StaticMapMarker {
   latitude: number;
@@ -24,6 +31,8 @@ export interface StaticMapOptions {
   outputDir?: string;
   filename?: string;
   tileUrlTemplate?: string;
+  tileProvider?: StaticMapTileProvider | string;
+  tileApiKey?: string;
 }
 
 export interface StaticMapResult {
@@ -36,6 +45,8 @@ export interface StaticMapResult {
   center: { latitude: number; longitude: number };
   markers: number;
   tiles: number;
+  tileProvider: string;
+  attribution: string;
 }
 
 export interface MediaDownloadOptions {
@@ -51,6 +62,51 @@ export interface MediaDownloadResult {
   url: string;
 }
 
+export interface StaticThumbnailOptions {
+  latitude: number;
+  longitude: number;
+  outputDir?: string;
+  filename?: string;
+}
+
+export function tileTemplateForProvider(
+  provider: StaticMapTileProvider | string = "osm",
+  apiKey?: string,
+): { template: string; provider: StaticMapTileProvider; attribution: string } {
+  const normalized = normalizeTileProvider(provider);
+  if (normalized === "esriWorldImagery") {
+    return {
+      template:
+        "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      provider: normalized,
+      attribution: "Imagery tiles (c) Esri and contributors",
+    };
+  }
+  if (normalized === "maptilerSatellite") {
+    const key = apiKey ?? process.env.NAVILY_MAPTILER_API_KEY ?? process.env.MAPTILER_API_KEY;
+    if (!key) throw new Error("maptilerSatellite requires NAVILY_MAPTILER_API_KEY, MAPTILER_API_KEY, or tileApiKey.");
+    return {
+      template: `https://api.maptiler.com/tiles/satellite-v4/{z}/{x}/{y}.jpg?key=${encodeURIComponent(key)}`,
+      provider: normalized,
+      attribution: "Satellite tiles (c) MapTiler",
+    };
+  }
+  if (normalized === "mapboxSatellite") {
+    const key = apiKey ?? process.env.NAVILY_MAPBOX_TOKEN ?? process.env.MAPBOX_TOKEN;
+    if (!key) throw new Error("mapboxSatellite requires NAVILY_MAPBOX_TOKEN, MAPBOX_TOKEN, or tileApiKey.");
+    return {
+      template: `https://api.mapbox.com/v4/mapbox.satellite/{z}/{x}/{y}@2x.jpg90?access_token=${encodeURIComponent(key)}`,
+      provider: normalized,
+      attribution: "Satellite tiles (c) Mapbox",
+    };
+  }
+  return {
+    template: DEFAULT_TILE_URL_TEMPLATE,
+    provider: "osm",
+    attribution: "Map tiles (c) OpenStreetMap contributors",
+  };
+}
+
 export async function createStaticMapImage(
   options: StaticMapOptions,
 ): Promise<StaticMapResult> {
@@ -61,10 +117,20 @@ export async function createStaticMapImage(
   const width = boundedInteger(options.width ?? 1024, 128, 4096, "width");
   const height = boundedInteger(options.height ?? 768, 128, 4096, "height");
   const zoom = boundedInteger(options.zoom ?? 13, 1, 19, "zoom");
-  const template =
-    options.tileUrlTemplate ??
-    process.env.NAVILY_TILE_URL_TEMPLATE ??
-    DEFAULT_TILE_URL_TEMPLATE;
+  const tileConfig = options.tileUrlTemplate
+    ? {
+      template: options.tileUrlTemplate,
+      provider: "custom",
+      attribution: "Map tiles from configured provider",
+    }
+    : process.env.NAVILY_TILE_URL_TEMPLATE
+      ? {
+        template: process.env.NAVILY_TILE_URL_TEMPLATE,
+        provider: "custom",
+        attribution: "Map tiles from configured provider",
+      }
+      : tileTemplateForProvider(options.tileProvider, options.tileApiKey);
+  const template = tileConfig.template;
 
   const centerPx = coordinateToWorldPixel(center.latitude, center.longitude, zoom);
   const left = centerPx.x - width / 2;
@@ -116,7 +182,7 @@ export async function createStaticMapImage(
   <rect width="100%" height="100%" fill="#cfd8dc" />
   ${tileImages.join("\n  ")}
   ${markerSvg}
-  <text x="10" y="${height - 10}" font-family="Inter, Arial, sans-serif" font-size="11" fill="#111827" paint-order="stroke" stroke="#ffffff" stroke-width="3">Map tiles (c) OpenStreetMap contributors</text>
+  <text x="10" y="${height - 10}" font-family="Inter, Arial, sans-serif" font-size="11" fill="#111827" paint-order="stroke" stroke="#ffffff" stroke-width="3">${escapeXml(tileConfig.attribution)}</text>
 </svg>
 `;
 
@@ -136,6 +202,8 @@ export async function createStaticMapImage(
     center,
     markers: markers.length,
     tiles: tileImages.length,
+    tileProvider: tileConfig.provider,
+    attribution: tileConfig.attribution,
   };
 }
 
@@ -156,6 +224,69 @@ export async function downloadMedia(
     bytes: body.byteLength,
     url: downloaded.url,
   };
+}
+
+export async function downloadStaticMapThumbnail(
+  options: StaticThumbnailOptions,
+): Promise<MediaDownloadResult> {
+  const coordinate = normalizeCoordinate(options);
+  const url = `${WEB_BASE}/static_cache/460x250-${coordinate.latitude}_${coordinate.longitude}.jpg`;
+  const res = await fetch(url, {
+    headers: {
+      Accept: "image/jpeg,image/*,*/*;q=0.8",
+      "User-Agent": USER_AGENT,
+    },
+  });
+  if (!res.ok) {
+    const fallback = await createStaticMapImage({
+      center: coordinate,
+      zoom: 13,
+      width: 460,
+      height: 250,
+      outputDir: options.outputDir,
+      filename: svgFallbackFilename(options.filename, coordinate),
+    });
+    return {
+      path: fallback.path,
+      contentType: fallback.contentType,
+      bytes: fallback.bytes,
+      url,
+    };
+  }
+  const body = Buffer.from(await res.arrayBuffer());
+  const outputPath = await writeOutput(
+    options.outputDir,
+    options.filename ?? `navily-static-${coordinate.latitude}_${coordinate.longitude}.jpg`,
+    body,
+  );
+  return {
+    path: outputPath,
+    contentType: res.headers.get("content-type") ?? "image/jpeg",
+    bytes: body.byteLength,
+    url: res.url,
+  };
+}
+
+function svgFallbackFilename(
+  filename: string | undefined,
+  coordinate: { latitude: number; longitude: number },
+): string {
+  if (!filename) return `navily-static-${coordinate.latitude}_${coordinate.longitude}.svg`;
+  return extname(filename) ? filename.replace(/\.[^.]+$/, ".svg") : `${filename}.svg`;
+}
+
+function normalizeTileProvider(provider: StaticMapTileProvider | string): StaticMapTileProvider {
+  const normalized = provider.trim().toLowerCase();
+  if (["esri", "esriworldimagery", "arcgis", "arcgisworldimagery", "satellite"].includes(normalized)) {
+    return "esriWorldImagery";
+  }
+  if (["maptiler", "maptilersatellite"].includes(normalized)) {
+    return "maptilerSatellite";
+  }
+  if (["mapbox", "mapboxsatellite"].includes(normalized)) {
+    return "mapboxSatellite";
+  }
+  return "osm";
 }
 
 function normalizeMarker(marker: StaticMapMarker): StaticMapMarker {

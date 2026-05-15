@@ -178,8 +178,8 @@ Endpoints, entities, and quirks are documented in `docs/kb/`.
 ```bash
 pnpm install
 pnpm build:all        # builds CLI + runline/dripline plugins
-pnpm test             # vitest
-psst run "pnpm test:live" # real Aegina map/media download smoke test
+pnpm test             # vitest; live tests are skipped by default
+psst run "pnpm test:live" # real read-only Navily endpoint + Aegina map/media smoke tests
 pnpm lint:all         # typechecks CLI + plugins
 pnpm dev -- whoami    # run from source via tsx
 ```
@@ -188,8 +188,9 @@ Plugin deployment note: `packages/runline-plugin/dist/` and
 `packages/dripline-plugin/dist/` are generated and not tracked. Run
 `pnpm build:plugins` or `pnpm build:all` before deploying either plugin.
 The generated runline plugin includes `navily.map.staticImage` and
-`navily.media.download`; the generated dripline plugin includes
-`navily_map_static_image` and `navily_media_download`.
+`navily.map.staticThumbnail` and `navily.media.download`; the generated
+dripline plugin includes `navily_map_static_image`,
+`navily_static_thumbnail`, and `navily_media_download`.
 
 ## Programmatic use
 

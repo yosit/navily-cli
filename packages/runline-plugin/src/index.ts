@@ -17,6 +17,7 @@ import type { ActionContext, RunlinePluginAPI } from "runline";
 import {
   createStaticMapImage,
   downloadMedia,
+  downloadStaticMapThumbnail,
   NavilyClient,
   type StaticMapMarker,
 } from "@yosit/navily-cli";
@@ -78,6 +79,25 @@ function optNum(input: unknown, key: string): number | undefined {
   return undefined;
 }
 
+function optBool(input: unknown, key: string): boolean {
+  const v = (input as Record<string, unknown>)?.[key];
+  if (typeof v === "boolean") return v;
+  if (typeof v === "string") return ["1", "true", "yes", "on"].includes(v.toLowerCase());
+  return false;
+}
+
+function pageOpts(input: unknown): {
+  page?: number;
+  perPage?: number;
+  maxPages?: number;
+} {
+  return {
+    page: optNum(input, "page"),
+    perPage: optNum(input, "perPage"),
+    maxPages: optNum(input, "maxPages"),
+  };
+}
+
 function optCenter(input: unknown): { latitude: number; longitude: number } | undefined {
   const latitude = optNum(input, "latitude") ?? optNum(input, "centerLatitude");
   const longitude = optNum(input, "longitude") ?? optNum(input, "centerLongitude");
@@ -126,7 +146,7 @@ function valueNum(value: unknown): number | undefined {
 
 export default function navily(rl: RunlinePluginAPI): void {
   rl.setName("navily");
-  rl.setVersion("0.1.0");
+  rl.setVersion("0.2.0");
   rl.setConnectionSchema({
     cookie: {
       type: "string",
@@ -261,6 +281,16 @@ export default function navily(rl: RunlinePluginAPI): void {
         description:
           "tile URL template with {z}/{x}/{y}; defaults to OSM or NAVILY_TILE_URL_TEMPLATE",
       },
+      tileProvider: {
+        type: "string",
+        required: false,
+        description: "osm, esriWorldImagery, maptilerSatellite, mapboxSatellite",
+      },
+      tileApiKey: {
+        type: "string",
+        required: false,
+        description: "MapTiler/Mapbox API key when using those satellite providers",
+      },
     },
     async execute(input) {
       return createStaticMapImage({
@@ -272,6 +302,27 @@ export default function navily(rl: RunlinePluginAPI): void {
         outputDir: optStr(input, "outputDir"),
         filename: optStr(input, "filename"),
         tileUrlTemplate: optStr(input, "tileUrlTemplate"),
+        tileProvider: optStr(input, "tileProvider"),
+        tileApiKey: optStr(input, "tileApiKey"),
+      });
+    },
+  });
+
+  rl.registerAction("map.staticThumbnail", {
+    description:
+      "Download Navily's cached 460x250 static map thumbnail for a coordinate. Writes a JPG and returns {path, contentType, bytes}.",
+    inputSchema: {
+      latitude: { type: "number", required: true },
+      longitude: { type: "number", required: true },
+      outputDir: { type: "string", required: false, description: "output directory (default NAVILY_OUTPUT_DIR or ./navily-output)" },
+      filename: { type: "string", required: false, description: "output filename (default coordinate-based .jpg)" },
+    },
+    async execute(input) {
+      return downloadStaticMapThumbnail({
+        latitude: num(input, "latitude"),
+        longitude: num(input, "longitude"),
+        outputDir: optStr(input, "outputDir"),
+        filename: optStr(input, "filename"),
       });
     },
   });
@@ -329,18 +380,38 @@ export default function navily(rl: RunlinePluginAPI): void {
   });
 
   rl.registerAction("port.listComments", {
-    description: "Paginated reviews — /ports/{portId}/comments (page 1)",
-    inputSchema: { portId: { type: "number", required: true } },
+    description: "Paginated reviews — /ports/{portId}/comments. Set allPages=true to aggregate pages.",
+    inputSchema: {
+      portId: { type: "number", required: true },
+      page: { type: "number", required: false },
+      perPage: { type: "number", required: false },
+      allPages: { type: "boolean", required: false },
+      maxPages: { type: "number", required: false },
+    },
     async execute(input, ctx) {
-      return getClient(ctx).portComments(num(input, "portId"));
+      const client = getClient(ctx);
+      const opts = pageOpts(input);
+      return optBool(input, "allPages")
+        ? client.portCommentsAll(num(input, "portId"), opts)
+        : client.portComments(num(input, "portId"), opts);
     },
   });
 
   rl.registerAction("port.listPhotos", {
-    description: "Paginated photos — /ports/{portId}/photos (page 1)",
-    inputSchema: { portId: { type: "number", required: true } },
+    description: "Paginated photos — /ports/{portId}/photos. Set allPages=true to aggregate pages.",
+    inputSchema: {
+      portId: { type: "number", required: true },
+      page: { type: "number", required: false },
+      perPage: { type: "number", required: false },
+      allPages: { type: "boolean", required: false },
+      maxPages: { type: "number", required: false },
+    },
     async execute(input, ctx) {
-      return getClient(ctx).portPhotos(num(input, "portId"));
+      const client = getClient(ctx);
+      const opts = pageOpts(input);
+      return optBool(input, "allPages")
+        ? client.portPhotosAll(num(input, "portId"), opts)
+        : client.portPhotos(num(input, "portId"), opts);
     },
   });
 
@@ -399,18 +470,38 @@ export default function navily(rl: RunlinePluginAPI): void {
   });
 
   rl.registerAction("mooring.listComments", {
-    description: "Paginated reviews — /moorings/{mooringId}/comments (page 1)",
-    inputSchema: { mooringId: { type: "number", required: true } },
+    description: "Paginated reviews — /moorings/{mooringId}/comments. Set allPages=true to aggregate pages.",
+    inputSchema: {
+      mooringId: { type: "number", required: true },
+      page: { type: "number", required: false },
+      perPage: { type: "number", required: false },
+      allPages: { type: "boolean", required: false },
+      maxPages: { type: "number", required: false },
+    },
     async execute(input, ctx) {
-      return getClient(ctx).mooringComments(num(input, "mooringId"));
+      const client = getClient(ctx);
+      const opts = pageOpts(input);
+      return optBool(input, "allPages")
+        ? client.mooringCommentsAll(num(input, "mooringId"), opts)
+        : client.mooringComments(num(input, "mooringId"), opts);
     },
   });
 
   rl.registerAction("mooring.listPhotos", {
-    description: "Paginated photos — /moorings/{mooringId}/photos (page 1)",
-    inputSchema: { mooringId: { type: "number", required: true } },
+    description: "Paginated photos — /moorings/{mooringId}/photos. Set allPages=true to aggregate pages.",
+    inputSchema: {
+      mooringId: { type: "number", required: true },
+      page: { type: "number", required: false },
+      perPage: { type: "number", required: false },
+      allPages: { type: "boolean", required: false },
+      maxPages: { type: "number", required: false },
+    },
     async execute(input, ctx) {
-      return getClient(ctx).mooringPhotos(num(input, "mooringId"));
+      const client = getClient(ctx);
+      const opts = pageOpts(input);
+      return optBool(input, "allPages")
+        ? client.mooringPhotosAll(num(input, "mooringId"), opts)
+        : client.mooringPhotos(num(input, "mooringId"), opts);
     },
   });
 
@@ -434,10 +525,17 @@ export default function navily(rl: RunlinePluginAPI): void {
   // ── regions ──────────────────────────────────────────────────────────
 
   rl.registerAction("region.list", {
-    description: "Global region index — /regions (page 1)",
-    inputSchema: {},
-    async execute(_input, ctx) {
-      return getClient(ctx).regions();
+    description: "Global region index — /regions. Set allPages=true to aggregate pages.",
+    inputSchema: {
+      page: { type: "number", required: false },
+      perPage: { type: "number", required: false },
+      allPages: { type: "boolean", required: false },
+      maxPages: { type: "number", required: false },
+    },
+    async execute(input, ctx) {
+      const client = getClient(ctx);
+      const opts = pageOpts(input);
+      return optBool(input, "allPages") ? client.regionsAll(opts) : client.regions(opts);
     },
   });
 
@@ -450,18 +548,38 @@ export default function navily(rl: RunlinePluginAPI): void {
   });
 
   rl.registerAction("region.listPorts", {
-    description: "Marinas in a region — /regions/{regionId}/ports (page 1)",
-    inputSchema: { regionId: { type: "number", required: true } },
+    description: "Marinas in a region — /regions/{regionId}/ports. Set allPages=true to aggregate pages.",
+    inputSchema: {
+      regionId: { type: "number", required: true },
+      page: { type: "number", required: false },
+      perPage: { type: "number", required: false },
+      allPages: { type: "boolean", required: false },
+      maxPages: { type: "number", required: false },
+    },
     async execute(input, ctx) {
-      return getClient(ctx).regionPorts(num(input, "regionId"));
+      const client = getClient(ctx);
+      const opts = pageOpts(input);
+      return optBool(input, "allPages")
+        ? client.regionPortsAll(num(input, "regionId"), opts)
+        : client.regionPorts(num(input, "regionId"), opts);
     },
   });
 
   rl.registerAction("region.listMoorings", {
-    description: "Anchorages in a region — /regions/{regionId}/moorings (page 1)",
-    inputSchema: { regionId: { type: "number", required: true } },
+    description: "Anchorages in a region — /regions/{regionId}/moorings. Set allPages=true to aggregate pages.",
+    inputSchema: {
+      regionId: { type: "number", required: true },
+      page: { type: "number", required: false },
+      perPage: { type: "number", required: false },
+      allPages: { type: "boolean", required: false },
+      maxPages: { type: "number", required: false },
+    },
     async execute(input, ctx) {
-      return getClient(ctx).regionMoorings(num(input, "regionId"));
+      const client = getClient(ctx);
+      const opts = pageOpts(input);
+      return optBool(input, "allPages")
+        ? client.regionMooringsAll(num(input, "regionId"), opts)
+        : client.regionMoorings(num(input, "regionId"), opts);
     },
   });
 
@@ -492,10 +610,20 @@ export default function navily(rl: RunlinePluginAPI): void {
   });
 
   rl.registerAction("me.listListComments", {
-    description: "Comments on a list — /lists/{listId}/comments (page 1)",
-    inputSchema: { listId: { type: "number", required: true } },
+    description: "Comments on a list — /lists/{listId}/comments. Set allPages=true to aggregate pages.",
+    inputSchema: {
+      listId: { type: "number", required: true },
+      page: { type: "number", required: false },
+      perPage: { type: "number", required: false },
+      allPages: { type: "boolean", required: false },
+      maxPages: { type: "number", required: false },
+    },
     async execute(input, ctx) {
-      return getClient(ctx).listComments(num(input, "listId"));
+      const client = getClient(ctx);
+      const opts = pageOpts(input);
+      return optBool(input, "allPages")
+        ? client.listCommentsAll(num(input, "listId"), opts)
+        : client.listComments(num(input, "listId"), opts);
     },
   });
 
