@@ -8,3 +8,4 @@ dist/
 *.cookies.txt
 .env
 .env.local
+.psst/

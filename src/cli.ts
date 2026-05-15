@@ -16,6 +16,8 @@ import {
   saveCookie, loadCookie, extractCookieFromCurl, COOKIE_FILE,
 } from "./config.js";
 import { emitJson, emitTable } from "./formatters.js";
+import { launchChromeWithCdp } from "./auth/chrome.js";
+import { loginToNavily } from "./auth/login.js";
 
 type Format = "json" | "table";
 
@@ -122,6 +124,21 @@ export function buildProgram(): Command {
     .command("status")
     .description("Verify the cookie works by calling /ajax/get-session-data.")
     .action(() => run(getFormat(program), c => c.whoami()));
+
+  auth
+    .command("login")
+    .description(
+      "Log in via Chrome and save the session cookie.\n" +
+      "Reads credentials from NAVILY_EMAIL and NAVILY_PASSWORD env vars.\n" +
+      "Requires Google Chrome installed (or NAVILY_CHROME_PATH set). If " +
+      "Turnstile shows a challenge, solve it in the window."
+    )
+    .option("--headless", "run Chrome headless (NOTE: navily.com's WAF blocks headless even with stealth — use xvfb-run on Linux CI, or mint locally and inject NAVILY_COOKIE)")
+    .option("--keep-open", "leave the browser open after a successful login")
+    .option("--timeout <seconds>", "max seconds to wait for login + Turnstile", "180")
+    .action(async (opts: { headless?: boolean; keepOpen?: boolean; timeout?: string }) => {
+      await runLogin(opts);
+    });
 
   // ── identity ────────────────────────────────────────────────────────
   program
@@ -258,6 +275,52 @@ function readStdin(): string {
     chunks.push(buf.subarray(0, n));
   }
   return Buffer.concat(chunks).toString("utf8");
+}
+
+async function runLogin(opts: { headless?: boolean; keepOpen?: boolean; timeout?: string }): Promise<void> {
+  const email = process.env.NAVILY_EMAIL;
+  const password = process.env.NAVILY_PASSWORD;
+  if (!email || !password) {
+    process.stderr.write("Set NAVILY_EMAIL and NAVILY_PASSWORD in your env.\n");
+    process.exit(2);
+  }
+  const headless = Boolean(opts.headless) || process.env.NAVILY_HEADLESS === "1";
+  const timeoutMs = Number(opts.timeout ?? 180) * 1000;
+
+  process.stderr.write(`→ Launching Chrome (${headless ? "headless" : "headed"}) with an ephemeral profile…\n`);
+  const session = await launchChromeWithCdp({ headless });
+  try {
+    const result = await loginToNavily(session.browser, {
+      email,
+      password,
+      timeoutMs,
+      keepOpen: opts.keepOpen,
+      headless,
+      onStep: (s) => process.stderr.write(`→ ${s}\n`),
+    });
+    const path = saveCookie(result.cookieHeader);
+    process.stdout.write(`✓ Cookie saved to ${path}\n`);
+
+    // Smoke-test the cookie under our cycletls JA3. If Cloudflare rejects,
+    // we want to know now, not when the user runs `navily port show 123`.
+    process.stderr.write("→ Verifying cookie via /ajax/get-session-data…\n");
+    const client = new NavilyClient(result.cookieHeader);
+    try {
+      await client.whoami();
+      process.stderr.write("✓ Cookie verified.\n");
+    } catch (e) {
+      process.stderr.write(
+        `⚠ Cookie saved but verification failed: ${(e as Error).message}\n` +
+        "  This usually means Chrome's TLS fingerprint drifted from cycletls's\n" +
+        "  pinned JA3. The cookie may still work for some endpoints.\n",
+      );
+    } finally {
+      await client.close();
+    }
+  } finally {
+    if (!opts.keepOpen) await session.teardown();
+    else process.stderr.write("(browser left open — kill it manually when done)\n");
+  }
 }
 
 async function editorPrompt(): Promise<string> {
