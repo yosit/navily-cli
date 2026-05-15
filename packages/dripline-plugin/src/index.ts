@@ -143,7 +143,7 @@ const B = (v: unknown): number => (v ? 1 : 0);
 
 export default function navily(dl: DriplinePluginAPI): void {
   dl.setName("navily");
-  dl.setVersion("0.3.1");
+  dl.setVersion("0.3.2");
   dl.setConnectionSchema({
     cookie: {
       type: "string",

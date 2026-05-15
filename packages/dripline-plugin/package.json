@@ -1,6 +1,6 @@
 {
-  "name": "dripline-plugin-navily",
-  "version": "0.3.1",
+  "name": "@yosit/dripline-plugin-navily",
+  "version": "0.3.2",
   "description": "navily.com plugin for dripline — query marinas, anchorages, weather, reviews, regions, bookings as SQL tables",
   "type": "module",
   "main": "dist/index.js",
@@ -33,6 +33,9 @@
   "author": "yosit",
   "engines": {
     "node": ">=20"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
   },
   "peerDependencies": {
     "dripline": ">=0.9.0"

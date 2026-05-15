@@ -82,7 +82,7 @@ export function buildProgram(): Command {
       "as cURL). Cloudflare blocks anything that doesn't look like Chrome, so the\n" +
       "CLI mimics Chrome's TLS fingerprint via cycletls.")
     .option("-f, --format <fmt>", "output format: json|table", "json")
-    .version("0.3.1");
+    .version("0.3.2");
 
   // ── auth ────────────────────────────────────────────────────────────
   const auth = program.command("auth").description("Manage the session cookie.");

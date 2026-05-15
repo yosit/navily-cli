@@ -1,4 +1,4 @@
-# dripline-plugin-navily
+# @yosit/dripline-plugin-navily
 
 [dripline](https://github.com/Michaelliv/dripline) plugin that turns
 [navily.com](https://www.navily.com) into SQL tables: marinas, anchorages,
@@ -11,14 +11,23 @@ clients even with a valid session cookie.
 
 ## Install
 
-This plugin lives in the `navily-cli` workspace and is built from source.
-The plugin `dist/` directory is generated, so always build before deploying.
+The plugin is published to GitHub Packages and also lives in this repository.
+The source `dist/` directory is generated, so always build before deploying
+from a checkout.
+
+```bash
+npm config set @yosit:registry https://npm.pkg.github.com
+dripline plugin install @yosit/dripline-plugin-navily
+```
+
+If your npm client prompts for auth, use a GitHub token with package read
+access.
 
 ```bash
 git clone https://github.com/yosit/navily-cli.git
 cd navily-cli
 pnpm install
-pnpm --filter dripline-plugin-navily build
+pnpm --filter ./packages/dripline-plugin build
 ```
 
 ### Install into dripline
@@ -65,7 +74,7 @@ auto-login.
 
 ```ts
 import { Dripline } from "dripline";
-import navily from "dripline-plugin-navily";
+import navily from "@yosit/dripline-plugin-navily";
 
 const dl = await Dripline.create({
   plugins: [navily],

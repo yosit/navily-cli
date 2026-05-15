@@ -1,6 +1,6 @@
 {
   "name": "@yosit/navily-cli",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "CLI for navily.com (marinas, anchorages, weather, bookings)",
   "type": "module",
   "main": "dist/index.js",
@@ -17,14 +17,14 @@
   ],
   "scripts": {
     "build": "tsc",
-    "build:plugins": "pnpm --filter runline-plugin-navily build && pnpm --filter dripline-plugin-navily build",
+    "build:plugins": "pnpm --filter ./packages/runline-plugin build && pnpm --filter ./packages/dripline-plugin build",
     "build:all": "pnpm run build && pnpm run build:plugins",
     "prepare": "pnpm run build:all",
     "test": "vitest run",
     "test:live": "NAVILY_LIVE_TESTS=1 vitest run tests/live-aegina.test.ts",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
-    "lint:plugins": "pnpm --filter runline-plugin-navily lint && pnpm --filter dripline-plugin-navily lint",
+    "lint:plugins": "pnpm --filter ./packages/runline-plugin lint && pnpm --filter ./packages/dripline-plugin lint",
     "lint:all": "pnpm run lint && pnpm run lint:plugins",
     "dev": "node --import tsx/esm src/cli.ts"
   },

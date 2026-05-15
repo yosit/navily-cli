@@ -2,7 +2,7 @@
  * runline plugin for navily.com.
  *
  * Exposes navily as JavaScript actions an agent can call from the QuickJS
- * sandbox. Pairs with `dripline-plugin-navily` (SQL reads) — runline is
+ * sandbox. Pairs with `@yosit/dripline-plugin-navily` (SQL reads) — runline is
  * better when you want to chain calls or perform writes.
  *
  * Action handlers run on the host (Node), not in the sandbox, so they
@@ -146,7 +146,7 @@ function valueNum(value: unknown): number | undefined {
 
 export default function navily(rl: RunlinePluginAPI): void {
   rl.setName("navily");
-  rl.setVersion("0.3.1");
+  rl.setVersion("0.3.2");
   rl.setConnectionSchema({
     cookie: {
       type: "string",

@@ -12,9 +12,20 @@ TypeScript CLI client for [navily.com](https://www.navily.com) — search marina
 
 `cycletls` (our TLS-impersonating HTTP client) ships a small Go binary inside its npm package — you don't need a Go toolchain. macOS arm64/x64 and Linux x64 are tested.
 
-### From source (current path)
+### From GitHub Packages
 
-The package is published to GitHub Packages (`@yosit` scope), which requires auth — for now the simplest install is from a clone:
+The package is published to GitHub Packages under the `@yosit` scope:
+
+```bash
+npm config set @yosit:registry https://npm.pkg.github.com
+npm install --global @yosit/navily-cli
+navily --help
+```
+
+If your npm client prompts for auth, use a GitHub token with package read
+access.
+
+### From source
 
 ```bash
 git clone https://github.com/yosit/navily-cli.git

@@ -1,11 +1,11 @@
-# runline-plugin-navily
+# @yosit/runline-plugin-navily
 
 [runline](https://github.com/Michaelliv/runline) plugin that turns
 [navily.com](https://www.navily.com) into callable JS actions for agent code:
 search, fetch marinas/anchorages/weather/reviews, look up regions, manage
 your boats and bookings.
 
-Pairs with [`dripline-plugin-navily`](../dripline-plugin) — dripline gives
+Pairs with [`@yosit/dripline-plugin-navily`](../dripline-plugin) — dripline gives
 you SQL `SELECT`s, runline gives you imperative actions you can chain
 together. They use the same cookie file and `cycletls` auth layer, so they
 avoid repeated login handshakes where possible.
@@ -15,14 +15,23 @@ the cycletls Go subprocess works fine.
 
 ## Install
 
-This plugin lives in the `navily-cli` workspace and is built from source.
-The plugin `dist/` directory is generated, so always build before deploying.
+The plugin is published to GitHub Packages and also lives in this repository.
+The source `dist/` directory is generated, so always build before deploying
+from a checkout.
+
+```bash
+npm config set @yosit:registry https://npm.pkg.github.com
+runline plugin install @yosit/runline-plugin-navily
+```
+
+If your npm client prompts for auth, use a GitHub token with package read
+access.
 
 ```bash
 git clone https://github.com/yosit/navily-cli.git
 cd navily-cli
 pnpm install
-pnpm --filter runline-plugin-navily build
+pnpm --filter ./packages/runline-plugin build
 ```
 
 ### Install into runline
@@ -69,7 +78,7 @@ auto-login.
 
 ```ts
 import { Runline } from "runline";
-import navily from "runline-plugin-navily";
+import navily from "@yosit/runline-plugin-navily";
 
 const rl = Runline.create({
   plugins: [navily],

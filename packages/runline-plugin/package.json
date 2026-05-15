@@ -1,6 +1,6 @@
 {
-  "name": "runline-plugin-navily",
-  "version": "0.3.1",
+  "name": "@yosit/runline-plugin-navily",
+  "version": "0.3.2",
   "description": "navily.com plugin for runline — callable actions for marinas, anchorages, reviews, bookings, weather",
   "type": "module",
   "main": "dist/index.js",
@@ -33,6 +33,9 @@
   "author": "yosit",
   "engines": {
     "node": ">=20"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
   },
   "peerDependencies": {
     "runline": ">=0.7.0"
