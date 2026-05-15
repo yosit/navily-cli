@@ -7,7 +7,7 @@ TypeScript CLI client for [navily.com](https://www.navily.com) — search marina
 ### Prerequisites
 
 - **Node ≥ 20** — `node --version` to check
-- **Google Chrome** — only needed for `navily auth login` (drives a real Chrome to mint the session cookie). Skip if you only use `NAVILY_COOKIE` or `navily auth from-curl`.
+- **Google Chrome** — optional. Only needed for `navily auth login --browser`. The default login path is browserless and works from `NAVILY_EMAIL`/`NAVILY_PASSWORD`.
 - **pnpm** — `npm i -g pnpm` if you don't have it. npm and yarn also work; commands below show pnpm.
 
 `cycletls` (our TLS-impersonating HTTP client) ships a small Go binary inside its npm package — you don't need a Go toolchain. macOS arm64/x64 and Linux x64 are tested.
@@ -66,22 +66,41 @@ rm -rf ~/.config/navily                     # wipes the saved cookie
 
 ## Authenticate
 
-navily.com is gated by Cloudflare Turnstile, so we can't POST credentials directly. Two ways to get a working cookie:
+navily.com is gated by Cloudflare, so the CLI uses `cycletls` for a Chrome-like TLS fingerprint during both login and API calls. In CI/agent contexts, set credentials and run any command:
 
-### Option A — `navily auth login` (recommended)
+```bash
+export NAVILY_EMAIL=you@example.com
+export NAVILY_PASSWORD=…
+navily whoami
+navily port show 301
+```
 
-Drives your installed Chrome through the login modal. Requires Google Chrome (override the binary with `NAVILY_CHROME_PATH`).
+If no cookie exists, or a saved cookie expires, the command logs in, saves a fresh cookie to `~/.config/navily/cookie`, and retries once. `NAVILY_COOKIE` still takes precedence and skips auto-login entirely.
+
+### Option A — Browserless env-var login (recommended)
+
+Runs the Navily login flow directly over `cycletls`; no browser or display server is required.
 
 ```bash
 export NAVILY_EMAIL=you@example.com NAVILY_PASSWORD=…   # or use `psst` to keep secrets out of your shell
 navily auth login
 ```
 
-A Chrome window opens against a fresh ephemeral profile, the CLI fills the form, and Turnstile usually passes silently. If it shows a challenge, solve it in the window — the flow waits and resumes. On success the cookie is saved and verified.
+On success the cookie is saved and verified. Normal subcommands use the same path automatically, so `auth login` is mainly useful as an explicit preflight.
 
-**Note on headless mode:** `--headless` exists but Cloudflare's WAF on navily.com refuses headless Chrome at the connection layer (Turnstile-side stealth patches aren't enough). For CI/agent use, either run inside `xvfb-run` on Linux, or mint the cookie locally and pass it through as `NAVILY_COOKIE`.
+If browserless login is blocked by Cloudflare in the future, run `navily auth login --browser` where Chrome is available, or set `NAVILY_COOKIE` from a pre-minted session. Automatic Chrome fallback is opt-in with `NAVILY_AUTH_BROWSER_FALLBACK=1`.
 
-### Option B — Paste a cookie from DevTools
+### Option B — Chrome login fallback
+
+Where Chrome is installed, you can force the original modal-driving flow:
+
+```bash
+navily auth login --browser
+```
+
+This opens a fresh ephemeral Chrome profile and fills the form. `--headless` is available for diagnostics, but navily.com's WAF has historically refused headless Chrome at the connection layer.
+
+### Option C — Paste a cookie from DevTools
 
 1. In Chrome, log into <https://www.navily.com>.
 2. Open DevTools → Network tab.
@@ -96,7 +115,7 @@ navily auth status   # verify
 
 The cookie is saved to `~/.config/navily/cookie` (mode 600). You can also set `NAVILY_COOKIE` directly in your env.
 
-Cookies rotate (Cloudflare's `cf_clearance` typically lasts <1 h). Re-run `auth login` or re-export when you see a `Cloudflare blocked` error.
+Cookies can expire. With `NAVILY_EMAIL` and `NAVILY_PASSWORD` set, commands refresh automatically; otherwise re-run `auth login` or re-export when you see an auth or Cloudflare error.
 
 ## Commands
 
@@ -132,7 +151,7 @@ navily -f table search "cannes" --limit 3
 
 ## How it works
 
-- **Auth**: Laravel session cookie + `X-XSRF-TOKEN` header. Cookie is obtained either by pasting from DevTools or by `navily auth login`, which drives a real Chrome (CDP-attach) through the Turnstile-gated login modal.
+- **Auth**: Laravel session cookie + `X-XSRF-TOKEN` header. Cookie is obtained either by browserless `cycletls` login, by `navily auth login --browser`, or by pasting from DevTools.
 - **TLS**: Cloudflare validates the `cf_clearance` cookie against the client's TLS fingerprint (JA3). Node's built-in `https` and `fetch` get a 403 challenge page even with valid cookies. We use [`cycletls`](https://github.com/Danny-Dasilva/CycleTLS) (a Go binary auto-installed via npm) that performs Chrome-grade TLS impersonation. The first request to a client spawns the Go process; calling `client.close()` shuts it down.
 - **API surface**: two channels.
   - Direct AJAX on `www.navily.com` (`/ajax/...`, `/api/...`).
@@ -155,8 +174,7 @@ pnpm dev -- whoami    # run from source via tsx
 ```ts
 import { NavilyClient, loadCookie } from "@yosit/navily-cli";
 
-const cookie = loadCookie()!;
-const client = new NavilyClient(cookie);
+const client = new NavilyClient();
 try {
   const me = await client.me();
   console.log(me);

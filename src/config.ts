@@ -7,7 +7,9 @@ const CONFIG_DIR =
   process.env.XDG_CONFIG_HOME
     ? join(process.env.XDG_CONFIG_HOME, "navily")
     : join(homedir(), ".config", "navily");
+export { CONFIG_DIR };
 export const COOKIE_FILE = join(CONFIG_DIR, "cookie");
+export const COOKIE_LOCK_FILE = join(CONFIG_DIR, "cookie.lock");
 
 /** Persist the cookie string with 600 perms. */
 export function saveCookie(cookieString: string): string {

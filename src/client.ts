@@ -3,10 +3,9 @@
  *
  * Auth model
  * ----------
- * Navily uses a Laravel session cookie + XSRF-TOKEN cookie. Both are gated
- * by Cloudflare's Turnstile anti-bot challenge, so programmatic login is
- * not possible. The CLI accepts a session cookie obtained from a real
- * browser (see `navily auth from-curl` or `navily auth set`).
+ * Navily uses a Laravel session cookie + XSRF-TOKEN cookie. Login and API
+ * calls go through cycletls so they present a Chrome-like TLS fingerprint.
+ * NAVILY_COOKIE can still provide a pre-minted cookie explicitly.
  *
  * TLS fingerprinting
  * ------------------
@@ -28,7 +27,8 @@
  */
 import { createRequire } from "node:module";
 import type { CycleTLSClient, CycleTLSResponse } from "cycletls";
-import { getXsrfToken } from "./config.js";
+import { ensureFreshCookie } from "./auth/auto.js";
+import { getXsrfToken, loadCookie } from "./config.js";
 
 // cycletls exports a function via CJS `module.exports = initCycleTLS`. TS's
 // NodeNext resolution surfaces it as a namespace, so we side-load it via
@@ -43,6 +43,7 @@ const CHROME_JA3 =
   "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-17513,29-23-24,0";
 const CHROME_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+const CYCLETLS_CONNECT_RETRIES = 2;
 
 type CycleTLSInstance = CycleTLSClient;
 
@@ -86,6 +87,13 @@ export class NotFoundError extends NavilyError {
 export interface NavilyClientOptions {
   timeout?: number;
   referer?: string;
+  /**
+   * When true, missing/stale cookies are minted from NAVILY_EMAIL and
+   * NAVILY_PASSWORD. NAVILY_COOKIE still wins and is never replaced.
+   */
+  autoAuth?: boolean;
+  /** Optional progress hook for auto-auth handshakes. */
+  onAuthStep?: (step: string) => void;
 }
 
 interface ProxyBody {
@@ -95,22 +103,24 @@ interface ProxyBody {
 }
 
 export class NavilyClient {
-  private readonly cookie: string;
-  private readonly xsrf: string;
+  private cookie: string | null;
+  private xsrf: string;
   private readonly timeout: number;
   private readonly referer: string;
+  private readonly autoAuth: boolean;
+  private readonly onAuthStep?: (step: string) => void;
   private cycleTlsPromise: Promise<CycleTLSInstance> | null = null;
 
-  constructor(cookie: string, opts: NavilyClientOptions = {}) {
+  constructor(cookie?: string | null, opts: NavilyClientOptions = {}) {
     if (!cookie) {
-      throw new NavilyAuthError(
-        "No cookie provided. Run `navily auth set` or set NAVILY_COOKIE.",
-      );
+      cookie = loadCookie();
     }
     this.cookie = cookie;
-    this.xsrf = getXsrfToken(cookie);
+    this.xsrf = cookie ? getXsrfToken(cookie) : "";
     this.timeout = opts.timeout ?? DEFAULT_TIMEOUT_MS;
     this.referer = opts.referer ?? `${WEB_BASE}/carte`;
+    this.autoAuth = opts.autoAuth ?? true;
+    this.onAuthStep = opts.onAuthStep;
   }
 
   /** Release the cycletls Go subprocess. Call after the last request. */
@@ -131,6 +141,11 @@ export class NavilyClient {
   }
 
   private baseHeaders(): Record<string, string> {
+    if (!this.cookie) {
+      throw new NavilyAuthError(
+        "No cookie provided. Run `navily auth login`, set NAVILY_EMAIL/NAVILY_PASSWORD, or set NAVILY_COOKIE.",
+      );
+    }
     return {
       Accept: "application/json, text/plain, */*",
       "Accept-Language": "en-US,en;q=0.8",
@@ -165,29 +180,89 @@ export class NavilyClient {
       url += (url.includes("?") ? "&" : "?") + qs.toString();
     }
 
-    const headers = this.baseHeaders();
     const body = opts.jsonBody !== undefined ? JSON.stringify(opts.jsonBody) : "";
-    if (opts.jsonBody !== undefined) headers["Content-Type"] = "application/json";
 
-    const t = await this.cycleTls();
-    let res: CycleTLSResponse;
-    try {
-      res = await t(
-        url,
-        {
-          body,
-          ja3: CHROME_JA3,
-          userAgent: CHROME_UA,
-          headers,
-          timeout: Math.ceil(this.timeout / 1000),
-        },
-        method.toLowerCase() as "get" | "post",
-      );
-    } catch (e) {
-      throw new NavilyError(`HTTP request failed: ${(e as Error).message}`, { url });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await this.ensureCookie(attempt === 1);
+      const headers = this.baseHeaders();
+      if (opts.jsonBody !== undefined) headers["Content-Type"] = "application/json";
+
+      let res: CycleTLSResponse;
+      try {
+        res = await this.sendWithCycleTlsRetry(
+          url,
+          {
+            body,
+            ja3: CHROME_JA3,
+            userAgent: CHROME_UA,
+            headers,
+            timeout: Math.ceil(this.timeout / 1000),
+          },
+          method.toLowerCase() as "get" | "post",
+        );
+      } catch (e) {
+        throw new NavilyError(`HTTP request failed: ${errorMessage(e)}`, { url });
+      }
+
+      try {
+        return this.parseResponse<T>(res, url);
+      } catch (e) {
+        if (attempt === 0 && this.canRefreshAfter(e)) {
+          continue;
+        }
+        throw e;
+      }
     }
 
-    return this.parseResponse<T>(res, url);
+    throw new NavilyAuthError("Auth retry failed.", { url });
+  }
+
+  private async sendWithCycleTlsRetry(
+    url: string,
+    opts: Parameters<CycleTLSInstance>[1],
+    method: "get" | "post",
+  ): Promise<CycleTLSResponse> {
+    let lastError: unknown;
+    for (let i = 0; i <= CYCLETLS_CONNECT_RETRIES; i += 1) {
+      try {
+        const t = await this.cycleTls();
+        return await t(url, opts, method);
+      } catch (e) {
+        lastError = e;
+        await this.resetCycleTls();
+        await new Promise((resolve) => setTimeout(resolve, 500 * (i + 1)));
+      }
+    }
+    throw lastError;
+  }
+
+  private async resetCycleTls(): Promise<void> {
+    const p = this.cycleTlsPromise;
+    this.cycleTlsPromise = null;
+    if (!p) return;
+    try {
+      const t = await p;
+      await t.exit();
+    } catch {
+      // The instance may have failed before it was reachable.
+    }
+  }
+
+  private async ensureCookie(force: boolean): Promise<void> {
+    if (!force && this.cookie) return;
+    if (!this.autoAuth) {
+      throw new NavilyAuthError(
+        "No cookie configured. Run `navily auth login`, set NAVILY_EMAIL/NAVILY_PASSWORD, or set NAVILY_COOKIE.",
+      );
+    }
+    const cookie = await ensureFreshCookie({ force, onStep: this.onAuthStep });
+    this.cookie = cookie;
+    this.xsrf = getXsrfToken(cookie);
+  }
+
+  private canRefreshAfter(e: unknown): boolean {
+    if (!this.autoAuth || process.env.NAVILY_COOKIE) return false;
+    return e instanceof CloudflareBlockedError || e instanceof NavilyAuthError;
   }
 
   private parseResponse<T>(res: CycleTLSResponse, url: string): T {
@@ -199,7 +274,7 @@ export class NavilyClient {
 
     if (status === 403 && typeof text === "string" && text.includes("Just a moment")) {
       throw new CloudflareBlockedError(
-        "Cloudflare challenge — your cookie's cf_clearance has expired. Refresh the cookie in your browser and re-export it.",
+        "Cloudflare challenge — your session cookie is expired or rejected.",
         { status, url },
       );
     }
@@ -431,4 +506,10 @@ export class NavilyClient {
   subscriptionLast() { return this.proxy("/user-subscriptions/last"); }
   /** GET /misc/countries — 251 countries. */
   countries() { return this.proxy<import("./types.js").Country[]>("/misc/countries"); }
+}
+
+function errorMessage(e: unknown): string {
+  if (e instanceof Error && e.message) return e.message;
+  if (typeof e === "string") return e;
+  try { return JSON.stringify(e); } catch { return String(e); }
 }

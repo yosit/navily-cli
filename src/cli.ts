@@ -13,11 +13,12 @@ import {
   NotFoundError,
 } from "./client.js";
 import {
-  saveCookie, loadCookie, extractCookieFromCurl, COOKIE_FILE,
+  saveCookie, extractCookieFromCurl, COOKIE_FILE,
 } from "./config.js";
 import { emitJson, emitTable } from "./formatters.js";
-import { launchChromeWithCdp } from "./auth/chrome.js";
-import { loginToNavily } from "./auth/login.js";
+import { AutoAuthUnavailableError } from "./auth/auto.js";
+import { loginViaHttpAndSaveCookie } from "./auth/http.js";
+import { loginAndSaveCookie } from "./auth/session.js";
 
 type Format = "json" | "table";
 
@@ -32,21 +33,11 @@ function emit(format: Format, data: unknown): void {
   else emitJson(data);
 }
 
-function newClient(): NavilyClient {
-  const cookie = loadCookie();
-  if (!cookie) {
-    process.stderr.write(
-      "No cookie configured. Run:\n" +
-      "  navily auth from-curl   # paste a `Copy as cURL` from DevTools\n" +
-      "or set NAVILY_COOKIE in your env.\n",
-    );
-    process.exit(2);
-  }
-  return new NavilyClient(cookie);
-}
-
 async function run(format: Format, fn: (c: NavilyClient) => Promise<unknown>): Promise<void> {
-  const c = newClient();
+  const c = new NavilyClient(null, {
+    autoAuth: true,
+    onAuthStep: (s) => process.stderr.write(`→ ${s}\n`),
+  });
   try {
     const data = await fn(c);
     emit(format, data);
@@ -58,6 +49,10 @@ async function run(format: Format, fn: (c: NavilyClient) => Promise<unknown>): P
 }
 
 function handleError(e: unknown): never {
+  if (e instanceof AutoAuthUnavailableError) {
+    process.stderr.write(`✗ ${e.message}\n`);
+    process.exit(2);
+  }
   if (e instanceof CloudflareBlockedError) {
     process.stderr.write(`✗ Cloudflare blocked: ${e.message}\n`);
     process.exit(3);
@@ -128,15 +123,16 @@ export function buildProgram(): Command {
   auth
     .command("login")
     .description(
-      "Log in via Chrome and save the session cookie.\n" +
+      "Log in and save the session cookie.\n" +
       "Reads credentials from NAVILY_EMAIL and NAVILY_PASSWORD env vars.\n" +
-      "Requires Google Chrome installed (or NAVILY_CHROME_PATH set). If " +
-      "Turnstile shows a challenge, solve it in the window."
+      "Uses browserless cycletls login by default. Pass --browser to drive " +
+      "Google Chrome instead."
     )
-    .option("--headless", "run Chrome headless (NOTE: navily.com's WAF blocks headless even with stealth — use xvfb-run on Linux CI, or mint locally and inject NAVILY_COOKIE)")
+    .option("--browser", "drive Chrome instead of browserless HTTP login")
+    .option("--headless", "run Chrome headless when --browser is used")
     .option("--keep-open", "leave the browser open after a successful login")
     .option("--timeout <seconds>", "max seconds to wait for login + Turnstile", "180")
-    .action(async (opts: { headless?: boolean; keepOpen?: boolean; timeout?: string }) => {
+    .action(async (opts: { browser?: boolean; headless?: boolean; keepOpen?: boolean; timeout?: string }) => {
       await runLogin(opts);
     });
 
@@ -277,7 +273,12 @@ function readStdin(): string {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-async function runLogin(opts: { headless?: boolean; keepOpen?: boolean; timeout?: string }): Promise<void> {
+async function runLogin(opts: {
+  browser?: boolean;
+  headless?: boolean;
+  keepOpen?: boolean;
+  timeout?: string;
+}): Promise<void> {
   const email = process.env.NAVILY_EMAIL;
   const password = process.env.NAVILY_PASSWORD;
   if (!email || !password) {
@@ -287,39 +288,38 @@ async function runLogin(opts: { headless?: boolean; keepOpen?: boolean; timeout?
   const headless = Boolean(opts.headless) || process.env.NAVILY_HEADLESS === "1";
   const timeoutMs = Number(opts.timeout ?? 180) * 1000;
 
-  process.stderr.write(`→ Launching Chrome (${headless ? "headless" : "headed"}) with an ephemeral profile…\n`);
-  const session = await launchChromeWithCdp({ headless });
-  try {
-    const result = await loginToNavily(session.browser, {
+  const result = opts.browser || opts.headless || opts.keepOpen
+    ? await loginAndSaveCookie({
+      email,
+      password,
+      headless,
+      timeoutMs,
+      keepOpen: opts.keepOpen,
+      onStep: (s) => process.stderr.write(`→ ${s}\n`),
+    })
+    : await loginViaHttpAndSaveCookie({
       email,
       password,
       timeoutMs,
-      keepOpen: opts.keepOpen,
-      headless,
       onStep: (s) => process.stderr.write(`→ ${s}\n`),
     });
-    const path = saveCookie(result.cookieHeader);
-    process.stdout.write(`✓ Cookie saved to ${path}\n`);
+  process.stdout.write(`✓ Cookie saved to ${result.cookiePath}\n`);
 
-    // Smoke-test the cookie under our cycletls JA3. If Cloudflare rejects,
-    // we want to know now, not when the user runs `navily port show 123`.
-    process.stderr.write("→ Verifying cookie via /ajax/get-session-data…\n");
-    const client = new NavilyClient(result.cookieHeader);
-    try {
-      await client.whoami();
-      process.stderr.write("✓ Cookie verified.\n");
-    } catch (e) {
-      process.stderr.write(
-        `⚠ Cookie saved but verification failed: ${(e as Error).message}\n` +
-        "  This usually means Chrome's TLS fingerprint drifted from cycletls's\n" +
-        "  pinned JA3. The cookie may still work for some endpoints.\n",
-      );
-    } finally {
-      await client.close();
-    }
+  // Smoke-test the cookie under our cycletls JA3. If Cloudflare rejects,
+  // we want to know now, not when the user runs `navily port show 123`.
+  process.stderr.write("→ Verifying cookie via /ajax/get-session-data…\n");
+  const client = new NavilyClient(result.cookieHeader, { autoAuth: false });
+  try {
+    await client.whoami();
+    process.stderr.write("✓ Cookie verified.\n");
+  } catch (e) {
+    process.stderr.write(
+      `⚠ Cookie saved but verification failed: ${(e as Error).message}\n` +
+      "  This usually means Chrome's TLS fingerprint drifted from cycletls's\n" +
+      "  pinned JA3. The cookie may still work for some endpoints.\n",
+    );
   } finally {
-    if (!opts.keepOpen) await session.teardown();
-    else process.stderr.write("(browser left open — kill it manually when done)\n");
+    await client.close();
   }
 }
 

@@ -7,7 +7,7 @@
  * Chromium quirks). By spawning a vanilla Chrome ourselves and *attaching*
  * over CDP, we get a real browser TLS fingerprint with none of those tells.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,10 @@ import { chromium, type Browser } from "playwright-core";
 
 export interface ChromeSession {
   browser: Browser;
+  /** Whether Chrome is actually running in headless mode. */
+  headless: boolean;
+  /** Human-readable display mode chosen for diagnostics. */
+  displayMode: "headed" | "headless" | "xvfb";
   /** Kill the Chrome process and clean up its temp profile. */
   teardown: () => Promise<void>;
 }
@@ -58,6 +62,14 @@ function locateChrome(): string {
 export async function launchChromeWithCdp(opts: LaunchOptions = {}): Promise<ChromeSession> {
   const binary = locateChrome();
   const profileDir = mkdtempSync(join(tmpdir(), "navily-chrome-"));
+  const noLinuxDisplay = process.platform === "linux" && !process.env.DISPLAY;
+  const useXvfb = noLinuxDisplay && hasCommand("xvfb-run");
+  const headless = useXvfb ? false : Boolean(opts.headless) || noLinuxDisplay;
+  const displayMode: ChromeSession["displayMode"] = useXvfb
+    ? "xvfb"
+    : headless
+      ? "headless"
+      : "headed";
 
   const args = [
     "--remote-debugging-port=0",
@@ -69,7 +81,7 @@ export async function launchChromeWithCdp(opts: LaunchOptions = {}): Promise<Chr
     "--disable-blink-features=AutomationControlled",
     "--disable-features=ChromeWhatsNewUI",
   ];
-  if (opts.headless) {
+  if (headless) {
     // Default to --headless=new (Chrome 109+). NAVILY_HEADLESS_MODE=old picks
     // the legacy headless binary path, which sometimes evades a different
     // bot-detection codepath.
@@ -84,7 +96,9 @@ export async function launchChromeWithCdp(opts: LaunchOptions = {}): Promise<Chr
   }
   args.push("about:blank");
 
-  const child = spawn(binary, args, { stdio: ["ignore", "ignore", "pipe"] });
+  const command = useXvfb ? "xvfb-run" : binary;
+  const commandArgs = useXvfb ? ["-a", binary, ...args] : args;
+  const child = spawn(command, commandArgs, { stdio: ["ignore", "ignore", "pipe"] });
 
   let exited = false;
   child.on("exit", () => { exited = true; });
@@ -105,7 +119,15 @@ export async function launchChromeWithCdp(opts: LaunchOptions = {}): Promise<Chr
     else cleanupProfile(profileDir);
   };
 
-  return { browser, teardown };
+  return { browser, headless, displayMode, teardown };
+}
+
+function hasCommand(command: string): boolean {
+  const result = spawnSync("command", ["-v", command], {
+    shell: true,
+    stdio: "ignore",
+  });
+  return result.status === 0;
 }
 
 async function readDevToolsPort(
