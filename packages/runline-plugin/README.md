@@ -15,14 +15,57 @@ the cycletls Go subprocess works fine.
 
 ## Install
 
-This plugin lives in the `navily-cli` workspace and isn't published to npm.
-Install from the repo by URL:
+This plugin lives in the `navily-cli` workspace and is built from source.
+The plugin `dist/` directory is generated, so always build before deploying.
 
 ```bash
-runline plugin install git:github.com/<your-fork>/navily-cli#packages/runline-plugin
+git clone https://github.com/yosit/navily-cli.git
+cd navily-cli
+pnpm install
+pnpm --filter runline-plugin-navily build
 ```
 
-Or wire it in programmatically:
+### Install into runline
+
+If your runline environment supports git package installs, install the plugin
+from this repository subdirectory:
+
+```bash
+runline plugin install git+https://github.com/yosit/navily-cli.git#packages/runline-plugin
+```
+
+If the installer does not build workspace subdirectories, use a source checkout
+and build first:
+
+```bash
+git clone https://github.com/yosit/navily-cli.git
+cd navily-cli
+pnpm install
+pnpm build:all
+runline plugin install ./packages/runline-plugin
+```
+
+### Vex agent
+
+Vex only needs env vars; no browser/display server is required:
+
+```bash
+export NAVILY_EMAIL=you@example.com
+export NAVILY_PASSWORD=…
+
+git clone https://github.com/yosit/navily-cli.git
+cd navily-cli
+pnpm install
+pnpm build:all
+
+runline plugin install ./packages/runline-plugin
+```
+
+The first action mints `~/.config/navily/cookie`; later runline, dripline, and
+CLI calls share it. `NAVILY_COOKIE` can provide a pre-minted cookie and skips
+auto-login.
+
+### Programmatic use
 
 ```ts
 import { Runline } from "runline";
